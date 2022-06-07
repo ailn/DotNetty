@@ -16,6 +16,8 @@ namespace DotNetty.Transport.Channels
     using DotNetty.Common.Concurrency;
     using DotNetty.Common.Internal.Logging;
     using DotNetty.Common.Utilities;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
+    using ReferenceEqualityComparer = DotNetty.Common.Utilities.ReferenceEqualityComparer;
 
     public class DefaultChannelPipeline : IChannelPipeline
     {
