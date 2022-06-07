@@ -16,6 +16,8 @@ namespace DotNetty.Transport.Channels.Sockets
     using DotNetty.Common.Concurrency;
     using DotNetty.Common.Internal.Logging;
     using DotNetty.Common.Utilities;
+    
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     public class SocketDatagramChannel : AbstractSocketMessageChannel, IDatagramChannel
     {
@@ -115,7 +117,7 @@ namespace DotNetty.Transport.Channels.Sockets
             operation.SetBuffer(bytes.Array, bytes.Offset, bytes.Count);
 
             bool pending;
-#if NETSTANDARD2_0
+#if NETSTANDARD2_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER || NET5_0_OR_GREATER
             pending = this.Socket.ReceiveFromAsync(operation);
 #else
             if (ExecutionContext.IsFlowSuppressed())

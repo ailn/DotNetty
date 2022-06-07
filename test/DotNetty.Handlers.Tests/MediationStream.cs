@@ -39,7 +39,7 @@ namespace DotNetty.Handlers.Tests
 
         public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => this.writeDataFunc(new ArraySegment<byte>(buffer, offset, count));
 
-#if !NETCOREAPP1_1
+#if !NETCOREAPP1_1 && !NET5_0_OR_GREATER
         public override IAsyncResult BeginRead(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
         {
             var tcs = new TaskCompletionSource<int>(state);

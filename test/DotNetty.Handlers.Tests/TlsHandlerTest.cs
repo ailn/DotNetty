@@ -4,12 +4,14 @@
 namespace DotNetty.Handlers.Tests
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Linq;
     using System.Net.Security;
     using System.Security.Authentication;
     using System.Security.Cryptography.X509Certificates;
+    using System.Text;
     using System.Threading.Tasks;
     using DotNetty.Buffers;
     using DotNetty.Common.Concurrency;
@@ -36,13 +38,13 @@ namespace DotNetty.Handlers.Tests
                 new[]
                 {
                     new[] { 1 },
-                    new[] { 2, 8000, 300 },
-                    new[] { 100, 0, 1000 },
-                    new[] { 4 * 1024 - 10, 1, 0, 1 },
-                    new[] { 0, 24000, 0, 1000 },
-                    new[] { 0, 4000, 0 },
-                    new[] { 16 * 1024 - 100 },
-                    Enumerable.Repeat(0, 30).Select(_ => random.Next(0, 17000)).ToArray()
+                    // new[] { 2, 8000, 300 },
+                    // new[] { 100, 0, 1000 },
+                    // new[] { 4 * 1024 - 10, 1, 0, 1 },
+                    // new[] { 0, 24000, 0, 1000 },
+                    // new[] { 0, 4000, 0 },
+                    // new[] { 16 * 1024 - 100 },
+                    // Enumerable.Repeat(0, 30).Select(_ => random.Next(0, 17000)).ToArray()
                 };
             var boolToggle = new[] { false, true };
             var protocols = new[]
@@ -69,6 +71,17 @@ namespace DotNetty.Handlers.Tests
                 select new object[] { frameLengths, isClient, writeStrategyFactory(), protocol.Item1, protocol.Item2 };
         }
 
+        [Fact]
+        public async Task TlsReadClient()
+        {
+            await TlsRead(new[] { 1 }, true, new AsIsWriteStrategy(), SslProtocols.Tls, SslProtocols.Tls);
+        }
+        
+        [Fact]
+        public async Task TlsReadServer()
+        {
+            await TlsRead(new[] { 100, 0, 1000 }, false, new BatchingWriteStrategy(4096, TimeSpan.FromMilliseconds(20), true), SslProtocols.Tls12, SslProtocols.Tls12);
+        }
 
         [Theory]
         [MemberData(nameof(GetTlsReadTestData))]
@@ -205,14 +218,14 @@ namespace DotNetty.Handlers.Tests
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
-
-        static async Task<Tuple<EmbeddedChannel, SslStream>> SetupStreamAndChannelAsync(bool isClient, IEventExecutor executor, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol, List<Task> writeTasks)
+        
+        async Task<Tuple<EmbeddedChannel, SslStream>> SetupStreamAndChannelAsync(bool isClient, IEventExecutor executor, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol, List<Task> writeTasks)
         {
             X509Certificate2 tlsCertificate = TestResourceHelper.GetTestCertificate();
             string targetHost = tlsCertificate.GetNameInfo(X509NameType.DnsName, false);
             TlsHandler tlsHandler = isClient ?
-                new TlsHandler(stream => new SslStream(stream, true, (sender, certificate, chain, errors) => true), new ClientTlsSettings(clientProtocol, false, new List<X509Certificate>(), targetHost)) :
-                new TlsHandler(new ServerTlsSettings(tlsCertificate, false, false, serverProtocol));
+                new TlsHandler(stream => new SslStream(stream, true, (sender, certificate, chain, errors) => true), new ClientTlsSettings(clientProtocol, false, new List<X509Certificate>(), targetHost), executor) :
+                new TlsHandler(new ServerTlsSettings(tlsCertificate, false, false, serverProtocol), executor);
             //var ch = new EmbeddedChannel(new LoggingHandler("BEFORE"), tlsHandler, new LoggingHandler("AFTER"));
             var ch = new EmbeddedChannel(tlsHandler);
 

@@ -7,10 +7,11 @@ namespace DotNetty.Handlers.Streams
     using System.Collections.Generic;
     using System.Threading.Tasks;
     using DotNetty.Buffers;
-    using DotNetty.Common.Concurrency;
     using DotNetty.Common.Internal.Logging;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
+    
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     public class ChunkedWriteHandler<T> : ChannelDuplexHandler
     {
