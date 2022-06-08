@@ -84,31 +84,61 @@ namespace DotNetty.Handlers.Tests
 
             try
             {
-                var writeTasks = new List<Task>();
-                var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks).WithTimeout(TimeSpan.FromSeconds(10));
-                EmbeddedChannel ch = pair.Item1;
-                SslStream driverStream = pair.Item2;
+                await executor.SubmitAsync(
+                    async () =>
+                    {
+                        var setupTimeout = TimeSpan.FromSeconds(100);
+                        var writeTasks = new List<Task>();
+                        var pair =
+                            await SetupStreamAndChannelAsync(
+                                isClient,
+                                executor,
+                                writeStrategy,
+                                serverProtocol,
+                                clientProtocol,
+                                writeTasks
+                            ).WithTimeout(setupTimeout);
 
-                int randomSeed = Environment.TickCount;
-                var random = new Random(randomSeed);
-                IByteBuffer expectedBuffer = Unpooled.Buffer(16 * 1024);
-                foreach (int len in frameLengths)
-                {
-                    var data = new byte[len];
-                    random.NextBytes(data);
-                    expectedBuffer.WriteBytes(data);
-                    await driverStream.WriteAsync(data, 0, data.Length).WithTimeout(TimeSpan.FromSeconds(5));
-                }
-                await Task.WhenAll(writeTasks).WithTimeout(TimeSpan.FromSeconds(5));
-                IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
-                await ReadOutboundAsync(async () => ch.ReadInbound<IByteBuffer>(), expectedBuffer.ReadableBytes, finalReadBuffer, TestTimeout);
-                bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
-                if (!isEqual)
-                {
-                    Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
-                }
-                driverStream.Dispose();
-                Assert.False(ch.Finish());
+                        EmbeddedChannel ch = pair.Item1;
+                        SslStream driverStream = pair.Item2;
+
+                        int randomSeed = Environment.TickCount;
+                        var random = new Random(randomSeed);
+                        IByteBuffer expectedBuffer = Unpooled.Buffer(16 * 1024);
+                        var driverStreamWriteTimeout = TimeSpan.FromSeconds(100);
+                        foreach (int len in frameLengths)
+                        {
+                            var data = new byte[len];
+                            random.NextBytes(data);
+                            expectedBuffer.WriteBytes(data);
+                            await driverStream
+                                .WriteAsync(data, 0, data.Length)
+                                .WithTimeout(driverStreamWriteTimeout);
+                        }
+
+                        var writeTasksTimeout = TimeSpan.FromSeconds(100);
+                        await Task
+                            .WhenAll(writeTasks)
+                            .WithTimeout(writeTasksTimeout);
+
+                        IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
+                        var readOutboundTimeout = TimeSpan.FromSeconds(100);
+                        await ReadOutboundAsync(
+                            async () => ch.ReadInbound<IByteBuffer>(),
+                            expectedBuffer.ReadableBytes,
+                            finalReadBuffer,
+                            readOutboundTimeout);
+
+                        bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
+                        if (!isEqual)
+                        {
+                            Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
+                        }
+
+                        driverStream.Dispose();
+                        Assert.False(ch.Finish());
+                    }
+                );
             }
             finally
             {
@@ -164,41 +194,51 @@ namespace DotNetty.Handlers.Tests
 
             try
             {
-                var writeTasks = new List<Task>();
-                var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks);
-                EmbeddedChannel ch = pair.Item1;
-                SslStream driverStream = pair.Item2;
-
-                int randomSeed = Environment.TickCount;
-                var random = new Random(randomSeed);
-                IByteBuffer expectedBuffer = Unpooled.Buffer(16 * 1024);
-                foreach (IEnumerable<int> lengths in frameLengths.Split(x => x < 0))
-                {
-                    ch.WriteOutbound(lengths.Select(len =>
-                    {
-                        var data = new byte[len];
-                        random.NextBytes(data);
-                        expectedBuffer.WriteBytes(data);
-                        return (object)Unpooled.WrappedBuffer(data);
-                    }).ToArray());
-                }
-
-                IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
-                var readBuffer = new byte[16 * 1024 * 10];
-                await ReadOutboundAsync(
+                await executor.SubmitAsync(
                     async () =>
                     {
-                        int read = await driverStream.ReadAsync(readBuffer, 0, readBuffer.Length);
-                        return Unpooled.WrappedBuffer(readBuffer, 0, read);
-                    },
-                    expectedBuffer.ReadableBytes, finalReadBuffer, TestTimeout);
-                bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
-                if (!isEqual)
-                {
-                    Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
-                }
-                driverStream.Dispose();
-                Assert.False(ch.Finish());
+                        var writeTasks = new List<Task>();
+                        var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks);
+                        EmbeddedChannel ch = pair.Item1;
+                        SslStream driverStream = pair.Item2;
+
+                        int randomSeed = Environment.TickCount;
+                        var random = new Random(randomSeed);
+                        IByteBuffer expectedBuffer = Unpooled.Buffer(16 * 1024);
+                        foreach (IEnumerable<int> lengths in frameLengths.Split(x => x < 0))
+                        {
+                            ch.WriteOutbound(
+                                lengths.Select(
+                                    len =>
+                                    {
+                                        var data = new byte[len];
+                                        random.NextBytes(data);
+                                        expectedBuffer.WriteBytes(data);
+                                        return (object)Unpooled.WrappedBuffer(data);
+                                    }).ToArray());
+                        }
+
+                        IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
+                        var readBuffer = new byte[16 * 1024 * 10];
+                        await ReadOutboundAsync(
+                            async () =>
+                            {
+                                int read = await driverStream.ReadAsync(readBuffer, 0, readBuffer.Length);
+                                return Unpooled.WrappedBuffer(readBuffer, 0, read);
+                            },
+                            expectedBuffer.ReadableBytes,
+                            finalReadBuffer,
+                            TestTimeout);
+                        bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
+                        if (!isEqual)
+                        {
+                            Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
+                        }
+
+                        driverStream.Dispose();
+                        Assert.False(ch.Finish());
+                    }
+                );
             }
             finally
             {
@@ -210,9 +250,15 @@ namespace DotNetty.Handlers.Tests
         {
             X509Certificate2 tlsCertificate = TestResourceHelper.GetTestCertificate();
             string targetHost = tlsCertificate.GetNameInfo(X509NameType.DnsName, false);
-            TlsHandler tlsHandler = isClient ?
-                new TlsHandler(stream => new SslStream(stream, true, (sender, certificate, chain, errors) => true), new ClientTlsSettings(clientProtocol, false, new List<X509Certificate>(), targetHost)) :
-                new TlsHandler(new ServerTlsSettings(tlsCertificate, false, false, serverProtocol));
+            TlsHandler tlsHandler = isClient
+                ? new TlsHandler(
+                    stream => new SslStream(stream, true, (sender, certificate, chain, errors) => true),
+                    new ClientTlsSettings(clientProtocol, false, new List<X509Certificate>(), targetHost)
+                )
+                : new TlsHandler(
+                    new ServerTlsSettings(tlsCertificate, false, false, serverProtocol)
+                );
+            
             //var ch = new EmbeddedChannel(new LoggingHandler("BEFORE"), tlsHandler, new LoggingHandler("AFTER"));
             var ch = new EmbeddedChannel(tlsHandler);
 
@@ -221,14 +267,24 @@ namespace DotNetty.Handlers.Tests
             {
                 if (writeTasks.Count > 0)
                 {
-                    await Task.WhenAll(writeTasks).WithTimeout(TestTimeout);
+                    var writeTasksTimeout = TimeSpan.FromSeconds(100);
+                    await Task.WhenAll(writeTasks).WithTimeout(writeTasksTimeout);
                     writeTasks.Clear();
                 }
 
                 if (readResultBuffer.ReadableBytes < output.Count)
                 {
                     if (ch.Active)
-                        await ReadOutboundAsync(async () => ch.ReadOutbound<IByteBuffer>(), output.Count - readResultBuffer.ReadableBytes, readResultBuffer, TestTimeout, readResultBuffer.ReadableBytes != 0 ? 0 : 1);
+                    {
+                        var readOutboundTimeout = TimeSpan.FromSeconds(100);
+                        await ReadOutboundAsync(
+                            async () => ch.ReadOutbound<IByteBuffer>(),
+                            output.Count - readResultBuffer.ReadableBytes,
+                            readResultBuffer,
+                            readOutboundTimeout,
+                            readResultBuffer.ReadableBytes != 0 ? 0 : 1
+                        );
+                    }
                 }
                 int read = Math.Min(output.Count, readResultBuffer.ReadableBytes);
                 readResultBuffer.ReadBytes(output.Array, output.Offset, read);
@@ -245,13 +301,18 @@ namespace DotNetty.Handlers.Tests
             });
 
             var driverStream = new SslStream(mediationStream, true, (_1, _2, _3, _4) => true);
+            var authenticateTimeout = TimeSpan.FromSeconds(100);
             if (isClient)
             {
-                await Task.Run(() => driverStream.AuthenticateAsServerAsync(tlsCertificate, false, serverProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
+                await Task
+                    .Run(() => driverStream.AuthenticateAsServerAsync(tlsCertificate, false, serverProtocol, false))
+                    .WithTimeout(authenticateTimeout);
             }
             else
             {
-                await Task.Run(() => driverStream.AuthenticateAsClientAsync(targetHost, null, clientProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
+                await Task
+                    .Run(() => driverStream.AuthenticateAsClientAsync(targetHost, null, clientProtocol, false))
+                    .WithTimeout(authenticateTimeout);
             }
             writeTasks.Clear();
 
