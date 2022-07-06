@@ -675,7 +675,7 @@ namespace DotNetty.Handlers.Tls
             int inputLength;
             TaskCompletionSource<int> readCompletionSource;
             ArraySegment<byte> sslOwnedBuffer;
-#if NETSTANDARD2_0
+#if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
             int readByteCount;
 #else
             SynchronousAsyncResult<int> syncReadResult;
@@ -719,7 +719,7 @@ namespace DotNetty.Handlers.Tls
                 }
                 this.sslOwnedBuffer = default(ArraySegment<byte>);
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
                 this.readByteCount = this.ReadFromInput(sslBuffer.Array, sslBuffer.Offset, sslBuffer.Count);
                 // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
                 new Task(
@@ -745,7 +745,7 @@ namespace DotNetty.Handlers.Tls
 #endif
             }
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
             public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
                 if (this.SourceReadableBytes > 0)
@@ -818,7 +818,7 @@ namespace DotNetty.Handlers.Tls
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
                 => this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
 
-#if !NETSTANDARD2_0
+#if !(NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER)
             static readonly Action<Task, object> WriteCompleteCallback = HandleChannelWriteComplete;
 
             public override IAsyncResult BeginWrite(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
