@@ -12,6 +12,7 @@ namespace DotNetty.Transport.Channels.Pool
     using System.Threading.Tasks;
     using DotNetty.Common;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Internal;
     using DotNetty.Transport.Bootstrapping;
 

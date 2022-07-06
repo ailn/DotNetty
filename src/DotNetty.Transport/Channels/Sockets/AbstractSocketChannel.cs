@@ -10,6 +10,7 @@ namespace DotNetty.Transport.Channels.Sockets
     using System.Net.Sockets;
     using System.Threading.Tasks;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Internal.Logging;
     using DotNetty.Common.Utilities;
 

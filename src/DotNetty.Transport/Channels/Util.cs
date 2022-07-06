@@ -6,6 +6,7 @@ namespace DotNetty.Transport.Channels
     using System;
     using System.Threading.Tasks;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Internal.Logging;
 
     static class Util

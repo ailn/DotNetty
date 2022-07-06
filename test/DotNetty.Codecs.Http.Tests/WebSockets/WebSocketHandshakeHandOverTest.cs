@@ -8,6 +8,7 @@ namespace DotNetty.Codecs.Http.Tests.WebSockets
     using DotNetty.Buffers;
     using DotNetty.Codecs.Http.WebSockets;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
     using DotNetty.Transport.Channels.Embedded;

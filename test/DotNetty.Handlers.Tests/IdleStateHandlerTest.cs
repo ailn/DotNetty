@@ -8,6 +8,7 @@ namespace DotNetty.Handlers.Tests
     using Xunit.Abstractions;
     using DotNetty.Handlers.Timeout;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using System;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;

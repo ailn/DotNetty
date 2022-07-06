@@ -12,6 +12,7 @@ namespace DotNetty.Transport.Channels
     using DotNetty.Buffers;
     using DotNetty.Common;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Internal;
     using DotNetty.Common.Utilities;
 

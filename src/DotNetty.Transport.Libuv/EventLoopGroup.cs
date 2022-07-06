@@ -11,6 +11,7 @@ namespace DotNetty.Transport.Libuv
     using System.Threading;
     using System.Threading.Tasks;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Transport.Channels;
     using DotNetty.Transport.Libuv.Native;
 

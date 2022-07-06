@@ -12,6 +12,7 @@ namespace DotNetty.Transport.Channels.Groups
     using System.Threading.Tasks;
     using DotNetty.Buffers;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Utilities;
 
     public class DefaultChannelGroup : IChannelGroup

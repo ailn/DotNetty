@@ -5,6 +5,7 @@ namespace DotNetty.Transport.Channels
 {
     using System.Diagnostics.Contracts;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     sealed class DefaultChannelHandlerContext : AbstractChannelHandlerContext
     {

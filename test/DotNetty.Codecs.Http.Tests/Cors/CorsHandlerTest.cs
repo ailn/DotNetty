@@ -6,6 +6,7 @@ namespace DotNetty.Codecs.Http.Tests.Cors
     using System.Collections.Generic;
     using DotNetty.Codecs.Http.Cors;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
     using DotNetty.Transport.Channels.Embedded;

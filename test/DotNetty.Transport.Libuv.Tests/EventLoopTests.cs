@@ -7,6 +7,7 @@ namespace DotNetty.Transport.Libuv.Tests
     using System.Threading;
     using System.Threading.Tasks;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Tests.Common;
     using Xunit;
     using Xunit.Abstractions;

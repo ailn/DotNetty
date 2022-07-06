@@ -9,6 +9,7 @@ namespace WebSockets.Client
     using DotNetty.Codecs.Http;
     using DotNetty.Codecs.Http.WebSockets;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
 

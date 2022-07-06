@@ -35,41 +35,15 @@ namespace DotNetty.Handlers.Tests
             throw new NotSupportedException();
         }
 
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => this.readDataFunc(new ArraySegment<byte>(buffer, offset, count));
-
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => this.writeDataFunc(new ArraySegment<byte>(buffer, offset, count));
-
-#if !NETCOREAPP1_1
-        public override IAsyncResult BeginRead(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            var tcs = new TaskCompletionSource<int>(state);
-            this.ReadAsync(buffer, offset, count, CancellationToken.None).ContinueWith(
-                t =>
-                {
-                    tcs.TrySetResult(t.Result);
-                    callback?.Invoke(tcs.Task);
-                }, 
-                TaskContinuationOptions.ExecuteSynchronously);
-            return tcs.Task;
+            return this.readDataFunc(new ArraySegment<byte>(buffer, offset, count));
         }
 
-        public override int EndRead(IAsyncResult asyncResult) => ((Task<int>)asyncResult).Result;
-
-        public override IAsyncResult BeginWrite(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            var tcs = new TaskCompletionSource<int>(state);
-            this.WriteAsync(buffer, offset, count, CancellationToken.None).ContinueWith(
-                t =>
-                {
-                    tcs.TrySetResult(0);
-                    callback?.Invoke(tcs.Task);
-                },
-                TaskContinuationOptions.ExecuteSynchronously);
-            return tcs.Task;
+            return this.writeDataFunc(new ArraySegment<byte>(buffer, offset, count));
         }
-
-        public override void EndWrite(IAsyncResult asyncResult) => ((Task<int>)asyncResult).Wait();
-#endif
 
         protected override void Dispose(bool disposing)
         {

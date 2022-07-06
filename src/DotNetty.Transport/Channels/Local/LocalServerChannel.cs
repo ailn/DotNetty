@@ -6,6 +6,7 @@ namespace DotNetty.Transport.Channels.Local
     using System;
     using System.Net;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Internal;
 
     /// <summary>

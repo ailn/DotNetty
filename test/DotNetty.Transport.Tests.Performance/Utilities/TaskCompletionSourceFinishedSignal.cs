@@ -4,6 +4,7 @@
 namespace DotNetty.Transport.Tests.Performance.Utilities
 {
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     public class TaskCompletionSourceFinishedSignal : IReadFinishedSignal
     {

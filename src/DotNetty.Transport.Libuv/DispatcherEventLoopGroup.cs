@@ -9,6 +9,7 @@ namespace DotNetty.Transport.Libuv
     using System.Collections.Generic;
     using System.Threading.Tasks;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Transport.Channels;
 
     public sealed class DispatcherEventLoopGroup : AbstractEventExecutorGroup, IEventLoopGroup

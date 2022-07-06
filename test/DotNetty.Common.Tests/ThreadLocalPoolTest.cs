@@ -4,6 +4,7 @@
 namespace DotNetty.Common.Tests
 {
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using System;
     using System.Runtime.ExceptionServices;
     using System.Threading;

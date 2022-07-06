@@ -11,6 +11,7 @@ namespace DotNetty.Codecs.Http.Cors
     using System.Linq;
     using System.Text;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Utilities;
 
     // Configuration for Cross-Origin Resource Sharing (CORS).

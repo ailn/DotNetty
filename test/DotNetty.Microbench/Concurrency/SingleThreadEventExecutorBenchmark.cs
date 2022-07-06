@@ -8,6 +8,7 @@ namespace DotNetty.Microbench.Concurrency
     using BenchmarkDotNet.Attributes;
     using BenchmarkDotNet.Engines;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Internal;
 
     [SimpleJob(RunStrategy.Monitoring)]

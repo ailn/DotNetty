@@ -10,6 +10,7 @@ namespace DotNetty.Transport.Channels
 
     using DotNetty.Buffers;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     /// <summary>
     /// A list of <see cref="IChannelHandler"/>s which handles or intercepts inbound events and outbound operations of

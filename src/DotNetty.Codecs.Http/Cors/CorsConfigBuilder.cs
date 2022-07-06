@@ -9,6 +9,7 @@ namespace DotNetty.Codecs.Http.Cors
     using System.Collections.Immutable;
     using System.Diagnostics.Contracts;
     using DotNetty.Common.Concurrency;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
     using DotNetty.Common.Utilities;
 
     public sealed class CorsConfigBuilder

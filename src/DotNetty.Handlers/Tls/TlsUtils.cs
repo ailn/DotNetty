@@ -90,6 +90,8 @@ namespace DotNetty.Handlers.Tls
             return packetLength;
         }
 
+        public static int GetEncryptedPacketLength(IByteBuffer buffer) => GetEncryptedPacketLength(buffer, buffer.ReaderIndex);
+
         public static void NotifyHandshakeFailure(IChannelHandlerContext ctx, Exception cause)
         {
             // We have may haven written some parts of data before an exception was thrown so ensure we always flush.
