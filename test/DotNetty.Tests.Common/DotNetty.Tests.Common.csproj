@@ -5,6 +5,8 @@
     <TargetFrameworks>netcoreapp3.1;net472</TargetFrameworks>
     <AssemblyOriginatorKeyFile>../../DotNetty.snk</AssemblyOriginatorKeyFile>
     <SignAssembly>true</SignAssembly>
+    <Configurations>Debug;Release;Package</Configurations>
+    <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\shared\dotnetty.com.pfx" />

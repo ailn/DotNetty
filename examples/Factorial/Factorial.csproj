@@ -3,6 +3,8 @@
     <TargetFrameworks>netstandard2.0;net472</TargetFrameworks>
     <NetStandardImplicitPackageVersion Condition=" '$(TargetFramework)' == 'netstandard2.0' ">2.0.3</NetStandardImplicitPackageVersion>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Configurations>Debug;Release;Package</Configurations>
+    <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\DotNetty.Common\DotNetty.Common.csproj" />

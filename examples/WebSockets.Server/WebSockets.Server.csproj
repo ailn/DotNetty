@@ -6,6 +6,8 @@
     <NetStandardImplicitPackageVersion Condition=" '$(TargetFramework)' == 'netcoreapp3.1' ">2.0.3</NetStandardImplicitPackageVersion>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <ServerGarbageCollection>true</ServerGarbageCollection>
+    <Configurations>Debug;Release;Package</Configurations>
+    <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(TargetFramework)' == 'net472' ">
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
