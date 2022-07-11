@@ -121,35 +121,36 @@ namespace DotNetty.Handlers.Tls
             switch (task.Status)
             {
                 case TaskStatus.RanToCompletion:
+                {
+                    TlsHandlerState oldState = self.state;
+
+                    Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
+                    self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
+
+                    self.capturedContext.FireUserEventTriggered(TlsHandshakeCompletionEvent.Success);
+
+                    if (oldState.Has(TlsHandlerState.ReadRequestedBeforeAuthenticated) && !self.capturedContext.Channel.Configuration.AutoRead)
                     {
-                        TlsHandlerState oldState = self.state;
-
-                        Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
-                        self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
-
-                        self.capturedContext.FireUserEventTriggered(TlsHandshakeCompletionEvent.Success);
-
-                        if (oldState.Has(TlsHandlerState.ReadRequestedBeforeAuthenticated) && !self.capturedContext.Channel.Configuration.AutoRead)
-                        {
-                            self.capturedContext.Read();
-                        }
-
-                        if (oldState.Has(TlsHandlerState.FlushedBeforeHandshake))
-                        {
-                            self.Wrap(self.capturedContext);
-                            self.capturedContext.Flush();
-                        }
-                        break;
+                        self.capturedContext.Read();
                     }
+
+                    if (oldState.Has(TlsHandlerState.FlushedBeforeHandshake))
+                    {
+                        self.Wrap(self.capturedContext);
+                        self.capturedContext.Flush();
+                    }
+
+                    break;
+                }
                 case TaskStatus.Canceled:
                 case TaskStatus.Faulted:
-                    {
-                        // ReSharper disable once AssignNullToNotNullAttribute -- task.Exception will be present as task is faulted
-                        TlsHandlerState oldState = self.state;
-                        Contract.Assert(!oldState.HasAny(TlsHandlerState.Authenticated));
-                        self.HandleFailure(task.Exception);
-                        break;
-                    }
+                {
+                    // ReSharper disable once AssignNullToNotNullAttribute -- task.Exception will be present as task is faulted
+                    TlsHandlerState oldState = self.state;
+                    Contract.Assert(!oldState.HasAny(TlsHandlerState.Authenticated));
+                    self.HandleFailure(task.Exception);
+                    break;
+                }
                 default:
                     throw new ArgumentOutOfRangeException(nameof(task), "Unexpected task status: " + task.Status);
             }
