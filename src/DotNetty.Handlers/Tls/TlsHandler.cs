@@ -33,7 +33,7 @@ namespace DotNetty.Handlers.Tls
         readonly MediationStream mediationStream;
         readonly TaskCompletionSource closeFuture;
 
-        volatile TlsHandlerState state;
+        TlsHandlerState state;
         int packetLength;
         volatile IChannelHandlerContext capturedContext;
         BatchingPendingWriteQueue pendingUnencryptedWrites;
