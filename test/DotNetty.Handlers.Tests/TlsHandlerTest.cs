@@ -69,6 +69,12 @@ namespace DotNetty.Handlers.Tests
                 select new object[] { frameLengths, isClient, writeStrategyFactory(), protocol.Item1, protocol.Item2 };
         }
 
+        [Fact]
+        public async Task TlsRead1()
+        {
+            
+        }
+
 
         [Theory]
         [MemberData(nameof(GetTlsReadTestData))]
