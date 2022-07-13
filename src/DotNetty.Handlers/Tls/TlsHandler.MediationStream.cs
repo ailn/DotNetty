@@ -53,7 +53,7 @@ namespace DotNetty.Handlers.Tls
                 this.inputLength = 0;
             }
 
-            public bool ExpandSource(int count)
+            public void ExpandSource(int count)
             {
                 Contract.Assert(this.input != null);
 
@@ -63,7 +63,7 @@ namespace DotNetty.Handlers.Tls
                 if (sslBuffer.Array == null)
                 {
                     // there is no pending read operation - keep for future
-                    return false;
+                    return;
                 }
 
                 this.sslOwnedBuffer = default(ArraySegment<byte>);
@@ -92,27 +92,23 @@ namespace DotNetty.Handlers.Tls
                 this.readCallback = null;
                 callback?.Invoke(promise.Task);
 #endif
-                return true;
             }
 
 #if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
             public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
-                lock(this.owner.sync)
+                if (this.SourceReadableBytes > 0)
                 {
-                    if (this.SourceReadableBytes > 0)
-                    {
-                        // we have the bytes available upfront - write out synchronously
-                        int read = this.ReadFromInput(buffer, offset, count);
-                        return Task.FromResult(read);
-                    }
-
-                    Contract.Assert(this.sslOwnedBuffer.Array == null);
-                    // take note of buffer - we will pass bytes there once available
-                    this.sslOwnedBuffer = new ArraySegment<byte>(buffer, offset, count);
-                    this.readCompletionSource = new TaskCompletionSource<int>();
-                    return this.readCompletionSource.Task;
+                    // we have the bytes available upfront - write out synchronously
+                    int read = this.ReadFromInput(buffer, offset, count);
+                    return Task.FromResult(read);
                 }
+
+                Contract.Assert(this.sslOwnedBuffer.Array == null);
+                // take note of buffer - we will pass bytes there once available
+                this.sslOwnedBuffer = new ArraySegment<byte>(buffer, offset, count);
+                this.readCompletionSource = new TaskCompletionSource<int>();
+                return this.readCompletionSource.Task;
             }
 #else
             public override IAsyncResult BeginRead(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
@@ -168,18 +164,12 @@ namespace DotNetty.Handlers.Tls
 
             public override void Write(byte[] buffer, int offset, int count)
             {
-                lock (this.owner.sync)
-                {
-                    this.owner.FinishWrap(buffer, offset, count);
-                }
+                this.owner.FinishWrap(buffer, offset, count);
             }
 
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
-                lock (this.owner.sync)
-                {
-                    return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
-                }
+                return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
             }
 
 #if !(NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER)
