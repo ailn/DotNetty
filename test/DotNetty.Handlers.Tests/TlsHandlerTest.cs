@@ -171,22 +171,24 @@ namespace DotNetty.Handlers.Tests
                 TlsHandler.Trace("Test" + nameof(this.TlsRead1), "AuthenticateAsServerAsync");
                 await Task.Run(() => serverSsl.AuthenticateAsServerAsync(tlsCertificate, false, SslProtocols.Tls11, false).WithTimeout(TimeSpan.FromSeconds(2)));
                 writeTasks.Clear();
+
+                await tlsHandler.HandshakeCompletedFuture.WithTimeout(TimeSpan.FromSeconds(2));
             }
             catch (Exception)
-            {
-                // while (TlsHandler.Events.TryDequeue(out string msg))
-                // {
-                //     this.Output.WriteLine(msg);
-                // }
-
-                throw;
-            }
-            finally
             {
                 while (TlsHandler.Events.TryDequeue(out string msg))
                 {
                     this.Output.WriteLine(msg);
                 }
+
+                throw;
+            }
+            finally
+            {
+                // while (TlsHandler.Events.TryDequeue(out string msg))
+                // {
+                //     this.Output.WriteLine(msg);
+                // }
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
@@ -248,6 +250,10 @@ namespace DotNetty.Handlers.Tests
             }
             finally
             {
+                // while (TlsHandler.Events.TryDequeue(out string msg))
+                // {
+                //     this.Output.WriteLine(msg);
+                // }
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
@@ -341,8 +347,21 @@ namespace DotNetty.Handlers.Tests
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
             }
+            catch (Exception)
+            {
+                // while (TlsHandler.Events.TryDequeue(out string msg))
+                // {
+                //     this.Output.WriteLine(msg);
+                // }
+
+                throw;
+            }
             finally
             {
+                while (TlsHandler.Events.TryDequeue(out string msg))
+                {
+                    this.Output.WriteLine(msg);
+                }
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
@@ -399,8 +418,10 @@ namespace DotNetty.Handlers.Tests
                 await Task.Run(() => driverStream.AuthenticateAsClientAsync(targetHost, null, clientProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
             }
             writeTasks.Clear();
-            
-            
+
+            // TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "Waiting for handler handshake to be completed");
+            // await tlsHandler.HandshakeCompletedFuture.WithTimeout(TimeSpan.FromSeconds(2));
+            // TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "Handler handshake completed");
 
             return Tuple.Create(ch, driverStream);
         }
@@ -424,6 +445,8 @@ namespace DotNetty.Handlers.Tests
                     while(true)
                     {
                         output = await readFunc().WithTimeout(readTimeout);//inbound ? ch.ReadInbound<IByteBuffer>() : ch.ReadOutbound<IByteBuffer>();
+                        TlsHandler.Trace("Test" + nameof(ReadOutboundAsync), $"output?.IsReadable: {output?.IsReadable()}");
+                        
                         if (output == null)
                             break;
 

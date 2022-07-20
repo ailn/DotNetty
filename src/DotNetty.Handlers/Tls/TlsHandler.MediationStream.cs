@@ -39,6 +39,8 @@ namespace DotNetty.Handlers.Tls
 
             public int SourceReadableBytes => this.inputLength - this.inputOffset;
 
+            public bool SourceIsReadable => this.SourceReadableBytes > 0;
+
             public void SetSource(byte[] source, int offset)
             {
                 Trace(nameof(MediationStream), $"{nameof(this.SetSource)} source.Length: {source.Length}, offset: {offset}");

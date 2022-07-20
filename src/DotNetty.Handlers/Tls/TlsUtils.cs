@@ -53,12 +53,13 @@ namespace DotNetty.Handlers.Tls
         ///     The length of the encrypted packet that is included in the buffer. This will
         ///     return <c>-1</c> if the given <see cref="IByteBuffer"/> is not encrypted at all.
         /// </returns>
-        public static int GetEncryptedPacketLength(IByteBuffer buffer, int offset)
+        public static int GetEncryptedPacketLength(IByteBuffer buffer, int offset, out byte contentType)
         {
             int packetLength = 0;
 
             // SSLv3 or TLS - Check ContentType
-            switch (buffer.GetByte(offset))
+            contentType = buffer.GetByte(offset); 
+            switch (contentType)
             {
                 case SSL_CONTENT_TYPE_CHANGE_CIPHER_SPEC:
                 case SSL_CONTENT_TYPE_ALERT:
@@ -88,6 +89,11 @@ namespace DotNetty.Handlers.Tls
             }
 
             return packetLength;
+        }
+
+        public static int GetEncryptedPacketLength(IByteBuffer buffer, int offset)
+        {
+            return GetEncryptedPacketLength(buffer, offset, out _);
         }
 
         public static void NotifyHandshakeFailure(IChannelHandlerContext ctx, Exception cause)
