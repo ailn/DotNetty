@@ -14,16 +14,15 @@ namespace DotNetty.Handlers.Tls
 
     partial class TlsHandler
     {
-        sealed class MediationStream : Stream
+        sealed class MediationStream : MediationStreamBase
         {
-            readonly TlsHandler owner;
             byte[] input;
             int inputStartOffset;
             int inputOffset;
             int inputLength;
             TaskCompletionSource<int> readCompletionSource;
             ArraySegment<byte> sslOwnedBuffer;
-#if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
+#if NETSTANDARD2_0 || NETCOREAPP3_1
             int readByteCount;
 #else
             SynchronousAsyncResult<int> syncReadResult;
@@ -33,15 +32,15 @@ namespace DotNetty.Handlers.Tls
 #endif
 
             public MediationStream(TlsHandler owner)
+                : base(owner)
             {
-                this.owner = owner;
             }
 
-            public int SourceReadableBytes => this.inputLength - this.inputOffset;
+            public override int SourceReadableBytes => this.inputLength - this.inputOffset;
 
-            public bool SourceIsReadable => this.SourceReadableBytes > 0;
+            public override bool SourceIsReadable => this.SourceReadableBytes > 0;
 
-            public void SetSource(byte[] source, int offset)
+            public override void SetSource(byte[] source, int offset)
             {
                 Trace(nameof(MediationStream), $"{nameof(this.SetSource)} source.Length: {source.Length}, offset: {offset}");
                 
@@ -51,7 +50,7 @@ namespace DotNetty.Handlers.Tls
                 this.inputLength = 0;
             }
 
-            public void ResetSource()
+            public override void ResetSource()
             {
                 Trace(nameof(MediationStream), $"{nameof(this.ResetSource)}");
                 
@@ -60,7 +59,7 @@ namespace DotNetty.Handlers.Tls
                 this.inputOffset = 0;
             }
 
-            public void ExpandSource(int count)
+            public override void ExpandSource(int count)
             {
                 Contract.Assert(this.input != null);
                 
@@ -77,7 +76,7 @@ namespace DotNetty.Handlers.Tls
 
                 this.sslOwnedBuffer = default(ArraySegment<byte>);
 
-#if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
+#if NETSTANDARD2_0 || NETCOREAPP3_1
                 this.readByteCount = this.ReadFromInput(sslBuffer.Array, sslBuffer.Offset, sslBuffer.Count);
                 // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
                 new Task(
@@ -103,7 +102,7 @@ namespace DotNetty.Handlers.Tls
 #endif
             }
 
-#if NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER
+#if NETSTANDARD2_0 || NETCOREAPP3_1
             public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
                 if (this.SourceReadableBytes > 0)
@@ -187,7 +186,7 @@ namespace DotNetty.Handlers.Tls
                 return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
             }
 
-#if !(NETSTANDARD2_0 || NETCOREAPP3_1_OR_GREATER || NET5_0_OR_GREATER)
+#if !(NETSTANDARD2_0 || NETCOREAPP3_1)
             static readonly Action<Task, object> WriteCompleteCallback = HandleChannelWriteComplete;
 
             public override IAsyncResult BeginWrite(byte[] buffer, int offset, int count, AsyncCallback callback, object state)

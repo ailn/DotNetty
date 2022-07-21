@@ -17,6 +17,7 @@ namespace DotNetty.Handlers.Tls
     using System.Threading.Tasks;
     using DotNetty.Buffers;
     using DotNetty.Codecs;
+    using DotNetty.Common;
     using DotNetty.Common.Concurrency;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
@@ -32,7 +33,7 @@ namespace DotNetty.Handlers.Tls
         static readonly Action<Task, object> HandshakeCompletionCallback = new Action<Task, object>(HandleHandshakeCompleted);
 
         readonly SslStream sslStream;
-        readonly MediationStream2 mediationStream;
+        readonly MediationStreamBase mediationStream;
         readonly TaskCompletionSource closeFuture;
         // readonly TaskCompletionSource authenticationComlpele
 
@@ -68,7 +69,7 @@ namespace DotNetty.Handlers.Tls
 
             this.settings = settings;
             this.closeFuture = new TaskCompletionSource();
-            this.mediationStream = new MediationStream2(this);
+            this.mediationStream = MediationStreamBase.Create(this);
             this.sslStream = sslStreamFactory(this.mediationStream);
 
             this.handshakeCompletedPromise = new TaskCompletionSource();
@@ -141,10 +142,9 @@ namespace DotNetty.Handlers.Tls
         }
 
         Stopwatch hsSw;
+
         static void HandleHandshakeCompleted(Task task, object state)
         {
-            // Thread.Sleep(50);
-            
             var self = (TlsHandler)state;
 
             lock (self)
@@ -158,8 +158,13 @@ namespace DotNetty.Handlers.Tls
 
                         Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
                         self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
+
+                        // This is for the case when we fed some app data bytes to mediation stream and
+                        // there are no more in the pipeline. Hence, we need to decrypt those and write to
+                        // the output. If there are more messages in the pipeline Unwrap will
+                        // handle those first anyway. 
                         self.UnwrapPending(self.capturedContext);
-                        
+
                         self.handshakeCompletedPromise.TryComplete();
                         self.capturedContext.FireUserEventTriggered(TlsHandshakeCompletionEvent.Success);
 
@@ -173,7 +178,7 @@ namespace DotNetty.Handlers.Tls
                             self.Wrap(self.capturedContext);
                             self.capturedContext.Flush();
                         }
-                        
+
                         break;
                     }
                     case TaskStatus.Canceled:
@@ -217,6 +222,7 @@ namespace DotNetty.Handlers.Tls
         }
 
         int decode;
+
         protected override void Decode(IChannelHandlerContext context, IByteBuffer input, List<object> output)
         {
             lock (this)
@@ -361,7 +367,7 @@ namespace DotNetty.Handlers.Tls
             {
                 Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ?");
                 
-                int outputBufferLength = this.mediationStream.TotalReadableBytes;
+                int outputBufferLength = this.mediationStream.SourceReadableBytes;
                 if (outputBufferLength > 0)
                 {
                     Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} TotalReadableBytes: {outputBufferLength}");
@@ -439,7 +445,7 @@ namespace DotNetty.Handlers.Tls
                     else
                     {
                         // Check if there are any readable bytes in the stream. If there are, those should be decrypted
-                        outputBufferLength = this.mediationStream.TotalReadableBytes;
+                        outputBufferLength = this.mediationStream.SourceReadableBytes;
                         if (outputBufferLength > 0)
                         {
                             Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} TotalReadableBytes: {outputBufferLength}");
@@ -623,7 +629,7 @@ namespace DotNetty.Handlers.Tls
         public override Task WriteAsync(IChannelHandlerContext context, object message)
         {
             Trace(nameof(TlsHandler), $"{nameof(this.WriteAsync)} message: {message}");
-            
+
             if (!(message is IByteBuffer))
             {
                 return TaskEx.FromException(new UnsupportedMessageTypeException(message, typeof(IByteBuffer)));
@@ -637,10 +643,10 @@ namespace DotNetty.Handlers.Tls
 
         public override void Flush(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.Flush)}");
-
             lock (this)
             {
+                Trace(nameof(TlsHandler), $"{nameof(this.Flush)}");
+
                 if (this.pendingUnencryptedWrites.IsEmpty)
                 {
                     this.pendingUnencryptedWrites.Add(Unpooled.Empty);
