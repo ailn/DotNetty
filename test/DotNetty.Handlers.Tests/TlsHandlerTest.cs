@@ -271,7 +271,7 @@ namespace DotNetty.Handlers.Tests
             };
             var mediationStream = new MediationStream(readDataFunc, input =>
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "writeDataFunc");
+                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
                 Task task = executor.SubmitAsync(() => writeStrategy.WriteToChannelAsync(ch, input)).Unwrap();
                 writeTasks.Add(task);
                 return task;

@@ -133,8 +133,9 @@ namespace DotNetty.Handlers.Tls
 
             int ReadFromInput(Memory<byte> destination)
             {
-                Trace(nameof(MediationStream), $"{nameof(this.ReadFromInput)} buffer.Length: {destination.Length}");
-                return this.source.Read(destination);
+                int read = this.source.Read(destination);
+                Trace(nameof(MediationStream), $"{nameof(this.ReadFromInput)} buffer.Length: {destination.Length}, read: {read}");
+                return read;
             }
 
             public override void Flush()
