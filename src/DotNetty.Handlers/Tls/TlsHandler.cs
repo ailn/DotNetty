@@ -4,6 +4,7 @@
 namespace DotNetty.Handlers.Tls
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Diagnostics.Contracts;
@@ -11,15 +12,18 @@ namespace DotNetty.Handlers.Tls
     using System.Net.Security;
     using System.Runtime.ExceptionServices;
     using System.Security.Cryptography.X509Certificates;
+    using System.Security.Permissions;
     using System.Threading;
     using System.Threading.Tasks;
     using DotNetty.Buffers;
     using DotNetty.Codecs;
+    using DotNetty.Common;
     using DotNetty.Common.Concurrency;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
-    public sealed class TlsHandler : ByteToMessageDecoder
+    public sealed partial class TlsHandler : ByteToMessageDecoder
     {
         readonly TlsSettings settings;
         const int FallbackReadBufferSize = 256;
@@ -29,7 +33,7 @@ namespace DotNetty.Handlers.Tls
         static readonly Action<Task, object> HandshakeCompletionCallback = new Action<Task, object>(HandleHandshakeCompleted);
 
         readonly SslStream sslStream;
-        readonly MediationStream mediationStream;
+        readonly MediationStreamBase mediationStream;
         readonly TaskCompletionSource closeFuture;
 
         TlsHandlerState state;
@@ -53,7 +57,7 @@ namespace DotNetty.Handlers.Tls
 
             this.settings = settings;
             this.closeFuture = new TaskCompletionSource();
-            this.mediationStream = new MediationStream(this);
+            this.mediationStream = MediationStreamBase.Create(this);
             this.sslStream = sslStreamFactory(this.mediationStream);
         }
 
@@ -118,14 +122,27 @@ namespace DotNetty.Handlers.Tls
         static void HandleHandshakeCompleted(Task task, object state)
         {
             var self = (TlsHandler)state;
-            switch (task.Status)
+            
+#if NET5_0_OR_GREATER
+            lock (self)
+#endif
             {
-                case TaskStatus.RanToCompletion:
+                switch (task.Status)
+                {
+                    case TaskStatus.RanToCompletion:
                     {
                         TlsHandlerState oldState = self.state;
 
                         Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
                         self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
+
+#if NET5_0_OR_GREATER
+                        // This is for the case when we fed some app-data bytes to mediation stream and
+                        // there are no more in the pipeline. Hence, we need to decrypt those and write to
+                        // the output. If there are more messages in the pipeline Unwrap will
+                        // handle those after this completes as it's behind same lock. 
+                        self.UnwrapPending(self.capturedContext);
+#endif
 
                         self.capturedContext.FireUserEventTriggered(TlsHandshakeCompletionEvent.Success);
 
@@ -139,10 +156,11 @@ namespace DotNetty.Handlers.Tls
                             self.Wrap(self.capturedContext);
                             self.capturedContext.Flush();
                         }
+
                         break;
                     }
-                case TaskStatus.Canceled:
-                case TaskStatus.Faulted:
+                    case TaskStatus.Canceled:
+                    case TaskStatus.Faulted:
                     {
                         // ReSharper disable once AssignNullToNotNullAttribute -- task.Exception will be present as task is faulted
                         TlsHandlerState oldState = self.state;
@@ -150,8 +168,9 @@ namespace DotNetty.Handlers.Tls
                         self.HandleFailure(task.Exception);
                         break;
                     }
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(task), "Unexpected task status: " + task.Status);
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(task), "Unexpected task status: " + task.Status);
+                }
             }
         }
 
@@ -311,151 +330,156 @@ namespace DotNetty.Handlers.Tls
         {
             Contract.Requires(packetLengths.Count > 0);
 
-            //bool notifyClosure = false; // todo: netty/issues/137
-            bool pending = false;
-
-            IByteBuffer outputBuffer = null;
-
-            try
+#if NET5_0_OR_GREATER
+            lock (this)
+#endif
             {
-                ArraySegment<byte> inputIoBuffer = packet.GetIoBuffer(offset, length);
-                this.mediationStream.SetSource(inputIoBuffer.Array, inputIoBuffer.Offset);
+                //bool notifyClosure = false; // todo: netty/issues/137
+                bool pending = false;
 
-                int packetIndex = 0;
+                IByteBuffer outputBuffer = null;
 
-                while (!this.EnsureAuthenticated())
+                try
                 {
-                    this.mediationStream.ExpandSource(packetLengths[packetIndex]);
-                    if (++packetIndex == packetLengths.Count)
+                    ArraySegment<byte> inputIoBuffer = packet.GetIoBuffer(offset, length);
+                    this.mediationStream.SetSource(inputIoBuffer.Array, inputIoBuffer.Offset);
+
+                    int packetIndex = 0;
+
+                    while (!this.EnsureAuthenticated())
                     {
-                        return;
+                        this.mediationStream.ExpandSource(packetLengths[packetIndex]);
+                        if (++packetIndex == packetLengths.Count)
+                        {
+                            return;
+                        }
                     }
-                }
 
-                Task<int> currentReadFuture = this.pendingSslStreamReadFuture;
+                    Task<int> currentReadFuture = this.pendingSslStreamReadFuture;
 
-                int outputBufferLength;
-
-                if (currentReadFuture != null)
-                {
-                    // restoring context from previous read
-                    Contract.Assert(this.pendingSslStreamReadBuffer != null);
-
-                    outputBuffer = this.pendingSslStreamReadBuffer;
-                    outputBufferLength = outputBuffer.WritableBytes;
-
-                    this.pendingSslStreamReadFuture = null;
-                    this.pendingSslStreamReadBuffer = null;
-                }
-                else
-                {
-                    outputBufferLength = 0;
-                }
-
-                // go through packets one by one (because SslStream does not consume more than 1 packet at a time)
-                for (; packetIndex < packetLengths.Count; packetIndex++)
-                {
-                    int currentPacketLength = packetLengths[packetIndex];
-                    this.mediationStream.ExpandSource(currentPacketLength);
+                    int outputBufferLength;
 
                     if (currentReadFuture != null)
                     {
-                        // there was a read pending already, so we make sure we completed that first
+                        // restoring context from previous read
+                        Contract.Assert(this.pendingSslStreamReadBuffer != null);
 
-                        if (!currentReadFuture.IsCompleted)
+                        outputBuffer = this.pendingSslStreamReadBuffer;
+                        outputBufferLength = outputBuffer.WritableBytes;
+
+                        this.pendingSslStreamReadFuture = null;
+                        this.pendingSslStreamReadBuffer = null;
+                    }
+                    else
+                    {
+                        outputBufferLength = 0;
+                    }
+
+                    // go through packets one by one (because SslStream does not consume more than 1 packet at a time)
+                    for (; packetIndex < packetLengths.Count; packetIndex++)
+                    {
+                        int currentPacketLength = packetLengths[packetIndex];
+                        this.mediationStream.ExpandSource(currentPacketLength);
+
+                        if (currentReadFuture != null)
                         {
-                            // we did feed the whole current packet to SslStream yet it did not produce any result -> move to the next packet in input
+                            // there was a read pending already, so we make sure we completed that first
 
-                            continue;
-                        }
-
-                        int read = currentReadFuture.Result;
-
-                        if (read == 0)
-                        {
-                            //Stream closed
-                            return;
-                        }
-
-                        // Now output the result of previous read and decide whether to do an extra read on the same source or move forward
-                        AddBufferToOutput(outputBuffer, read, output);
-
-                        currentReadFuture = null;
-                        outputBuffer = null;
-                        if (this.mediationStream.SourceReadableBytes == 0)
-                        {
-                            // we just made a frame available for reading but there was already pending read so SslStream read it out to make further progress there
-
-                            if (read < outputBufferLength)
+                            if (!currentReadFuture.IsCompleted)
                             {
-                                // SslStream returned non-full buffer and there's no more input to go through ->
-                                // typically it means SslStream is done reading current frame so we skip
+                                // we did feed the whole current packet to SslStream yet it did not produce any result -> move to the next packet in input
                                 continue;
                             }
 
-                            // we've read out `read` bytes out of current packet to fulfil previously outstanding read
-                            outputBufferLength = currentPacketLength - read;
-                            if (outputBufferLength <= 0)
+                            int read = currentReadFuture.Result;
+                            if (read == 0)
                             {
-                                // after feeding to SslStream current frame it read out more bytes than current packet size
-                                outputBufferLength = FallbackReadBufferSize;
+                                //Stream closed
+                                return;
+                            }
+
+                            // Now output the result of previous read and decide whether to do an extra read on the same source or move forward
+                            AddBufferToOutput(outputBuffer, read, output);
+
+                            currentReadFuture = null;
+                            outputBuffer = null;
+                            if (!this.mediationStream.SourceIsReadable)
+                            {
+                                // we just made a frame available for reading but there was already pending read so SslStream read it out to make further progress there
+
+                                if (read < outputBufferLength)
+                                {
+                                    // SslStream returned non-full buffer and there's no more input to go through ->
+                                    // typically it means SslStream is done reading current frame so we skip
+                                    continue;
+                                }
+
+                                // we've read out `read` bytes out of current packet to fulfil previously outstanding read
+                                outputBufferLength = currentPacketLength - read;
+                                if (outputBufferLength <= 0)
+                                {
+                                    // after feeding to SslStream current frame it read out more bytes than current packet size
+                                    outputBufferLength = FallbackReadBufferSize;
+                                }
+                            }
+                            else
+                            {
+                                // SslStream did not get to reading current frame so it completed previous read sync
+                                // and the next read will likely read out the new frame
+                                outputBufferLength = currentPacketLength;
                             }
                         }
                         else
                         {
-                            // SslStream did not get to reading current frame so it completed previous read sync
-                            // and the next read will likely read out the new frame
+                            // there was no pending read before so we estimate buffer of `currentPacketLength` bytes to be sufficient
                             outputBufferLength = currentPacketLength;
                         }
-                    }
-                    else
-                    {
-                        // there was no pending read before so we estimate buffer of `currentPacketLength` bytes to be sufficient
-                        outputBufferLength = currentPacketLength;
+
+                        outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
+                        currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
                     }
 
-                    outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
-                    currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
-                }
-
-                // read out the rest of SslStream's output (if any) at risk of going async
-                // using FallbackReadBufferSize - buffer size we're ok to have pinned with the SslStream until it's done reading
-                while (true)
-                {
-                    if (currentReadFuture != null)
+                    // read out the rest of SslStream's output (if any) at risk of going async
+                    // using FallbackReadBufferSize - buffer size we're ok to have pinned with the SslStream until it's done reading
+                    while (true)
                     {
-                        if (!currentReadFuture.IsCompleted)
+                        if (currentReadFuture != null)
                         {
-                            break;
-                        }
-                        int read = currentReadFuture.Result;
-                        AddBufferToOutput(outputBuffer, read, output);
-                    }
-                    outputBuffer = ctx.Allocator.Buffer(FallbackReadBufferSize);
-                    currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, FallbackReadBufferSize);
-                }
+                            if (!currentReadFuture.IsCompleted)
+                            {
+                                break;
+                            }
 
-                pending = true;
-                this.pendingSslStreamReadBuffer = outputBuffer;
-                this.pendingSslStreamReadFuture = currentReadFuture;
-            }
-            catch (Exception ex)
-            {
-                this.HandleFailure(ex);
-                throw;
-            }
-            finally
-            {
-                this.mediationStream.ResetSource();
-                if (!pending && outputBuffer != null)
-                {
-                    if (outputBuffer.IsReadable())
-                    {
-                        output.Add(outputBuffer);
+                            int read = currentReadFuture.Result;
+                            AddBufferToOutput(outputBuffer, read, output);
+                        }
+
+                        outputBuffer = ctx.Allocator.Buffer(FallbackReadBufferSize);
+                        currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, FallbackReadBufferSize);
                     }
-                    else
+
+                    pending = true;
+                    this.pendingSslStreamReadBuffer = outputBuffer;
+                    this.pendingSslStreamReadFuture = currentReadFuture;
+                }
+                catch (Exception ex)
+                {
+                    this.HandleFailure(ex);
+                    throw;
+                }
+                finally
+                {
+                    this.mediationStream.ResetSource();
+                    if (!pending && outputBuffer != null)
                     {
-                        outputBuffer.SafeRelease();
+                        if (outputBuffer.IsReadable())
+                        {
+                            output.Add(outputBuffer);
+                        }
+                        else
+                        {
+                            outputBuffer.SafeRelease();
+                        }
                     }
                 }
             }
@@ -475,10 +499,15 @@ namespace DotNetty.Handlers.Tls
 
         public override void Read(IChannelHandlerContext context)
         {
-            TlsHandlerState oldState = this.state;
-            if (!oldState.HasAny(TlsHandlerState.AuthenticationCompleted))
+#if NET5_0_OR_GREATER
+            lock (this)
+#endif
             {
-                this.state = oldState | TlsHandlerState.ReadRequestedBeforeAuthenticated;
+                TlsHandlerState oldState = this.state;
+                if (!oldState.HasAny(TlsHandlerState.AuthenticationCompleted))
+                {
+                    this.state = oldState | TlsHandlerState.ReadRequestedBeforeAuthenticated;
+                }
             }
 
             context.Read();
@@ -514,37 +543,48 @@ namespace DotNetty.Handlers.Tls
             {
                 return TaskEx.FromException(new UnsupportedMessageTypeException(message, typeof(IByteBuffer)));
             }
-            return this.pendingUnencryptedWrites.Add(message);
+
+#if NET5_0_OR_GREATER
+            lock (this)
+#endif
+            {
+                return this.pendingUnencryptedWrites.Add(message);
+            }
         }
 
         public override void Flush(IChannelHandlerContext context)
         {
-            if (this.pendingUnencryptedWrites.IsEmpty)
+#if NET5_0_OR_GREATER
+            lock (this)
+#endif
             {
-                this.pendingUnencryptedWrites.Add(Unpooled.Empty);
-            }
+                if (this.pendingUnencryptedWrites.IsEmpty)
+                {
+                    this.pendingUnencryptedWrites.Add(Unpooled.Empty);
+                }
 
-            if (!this.EnsureAuthenticated())
-            {
-                this.state |= TlsHandlerState.FlushedBeforeHandshake;
-                return;
-            }
+                if (!this.EnsureAuthenticated())
+                {
+                    this.state |= TlsHandlerState.FlushedBeforeHandshake;
+                    return;
+                }
 
-            try
-            {
-                this.Wrap(context);
-            }
-            finally
-            {
-                // We may have written some parts of data before an exception was thrown so ensure we always flush.
-                context.Flush();
+                try
+                {
+                    this.Wrap(context);
+                }
+                finally
+                {
+                    // We may have written some parts of data before an exception was thrown so ensure we always flush.
+                    context.Flush();
+                }
             }
         }
-
+        
         void Wrap(IChannelHandlerContext context)
         {
             Contract.Assert(context == this.capturedContext);
-
+        
             IByteBuffer buf = null;
             try
             {
@@ -569,6 +609,7 @@ namespace DotNetty.Handlers.Tls
                             buffer.Release();
                         }
                     }
+
                     buf.ReadBytes(this.sslStream, buf.ReadableBytes); // this leads to FinishWrap being called 0+ times
                     buf.Release();
 
@@ -627,7 +668,6 @@ namespace DotNetty.Handlers.Tls
         {
             // Release all resources such as internal buffers that SSLEngine
             // is managing.
-
             this.mediationStream.Dispose();
             try
             {
@@ -664,322 +704,60 @@ namespace DotNetty.Handlers.Tls
                 this.CloseAsync(this.capturedContext);
             }
         }
-
-        sealed class MediationStream : Stream
+        
+        void UnwrapPending(IChannelHandlerContext ctx)
         {
-            readonly TlsHandler owner;
-            byte[] input;
-            int inputStartOffset;
-            int inputOffset;
-            int inputLength;
-            TaskCompletionSource<int> readCompletionSource;
-            ArraySegment<byte> sslOwnedBuffer;
-#if NETSTANDARD2_0
-            int readByteCount;
-#else
-            SynchronousAsyncResult<int> syncReadResult;
-            AsyncCallback readCallback;
-            TaskCompletionSource writeCompletion;
-            AsyncCallback writeCallback;
-#endif
-
-            public MediationStream(TlsHandler owner)
+            try
             {
-                this.owner = owner;
-            }
-
-            public int SourceReadableBytes => this.inputLength - this.inputOffset;
-
-            public void SetSource(byte[] source, int offset)
-            {
-                this.input = source;
-                this.inputStartOffset = offset;
-                this.inputOffset = 0;
-                this.inputLength = 0;
-            }
-
-            public void ResetSource()
-            {
-                this.input = null;
-                this.inputLength = 0;
-            }
-
-            public void ExpandSource(int count)
-            {
-                Contract.Assert(this.input != null);
-
-                this.inputLength += count;
-
-                ArraySegment<byte> sslBuffer = this.sslOwnedBuffer;
-                if (sslBuffer.Array == null)
+                while (this.mediationStream.SourceIsReadable)
                 {
-                    // there is no pending read operation - keep for future
-                    return;
-                }
-                this.sslOwnedBuffer = default(ArraySegment<byte>);
-
-#if NETSTANDARD2_0
-                this.readByteCount = this.ReadFromInput(sslBuffer.Array, sslBuffer.Offset, sslBuffer.Count);
-                // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
-                new Task(
-                    ms =>
+                    int sourceReadableBytes = this.mediationStream.SourceReadableBytes;
+                    while (sourceReadableBytes > 0)
                     {
-                        var self = (MediationStream)ms;
-                        TaskCompletionSource<int> p = self.readCompletionSource;
-                        self.readCompletionSource = null;
-                        p.TrySetResult(self.readByteCount);
-                    },
-                    this)
-                    .RunSynchronously(TaskScheduler.Default);
-#else
-                int read = this.ReadFromInput(sslBuffer.Array, sslBuffer.Offset, sslBuffer.Count);
+                        int outputBufferLength = Math.Min(sourceReadableBytes, FallbackReadBufferSize);
 
-                TaskCompletionSource<int> promise = this.readCompletionSource;
-                this.readCompletionSource = null;
-                promise.TrySetResult(read);
+                        IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
+                        // NOTE: SslStream gives bigger buffer than a packed, hence, MediationStreamNet will try to
+                        // fill it up. This may result in all mediationStream.SourceReadableBytes fed up to the
+                        // SslStream, however it'll return outputBufferLength at most. Hence, we need to subtract and
+                        // keep calling ReadFromSslStreamAsync for the rest of sourceReadableBytes.
+                        Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
 
-                AsyncCallback callback = this.readCallback;
-                this.readCallback = null;
-                callback?.Invoke(promise.Task);
-#endif
-            }
-
-#if NETSTANDARD2_0
-            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-            {
-                if (this.SourceReadableBytes > 0)
-                {
-                    // we have the bytes available upfront - write out synchronously
-                    int read = this.ReadFromInput(buffer, offset, count);
-                    return Task.FromResult(read);
-                }
-
-                Contract.Assert(this.sslOwnedBuffer.Array == null);
-                // take note of buffer - we will pass bytes there once available
-                this.sslOwnedBuffer = new ArraySegment<byte>(buffer, offset, count);
-                this.readCompletionSource = new TaskCompletionSource<int>();
-                return this.readCompletionSource.Task;
-            }
-#else
-            public override IAsyncResult BeginRead(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
-            {
-                if (this.SourceReadableBytes > 0)
-                {
-                    // we have the bytes available upfront - write out synchronously
-                    int read = this.ReadFromInput(buffer, offset, count);
-                    var res = this.PrepareSyncReadResult(read, state);
-                    callback?.Invoke(res);
-                    return res;
-                }
-
-                Contract.Assert(this.sslOwnedBuffer.Array == null);
-                // take note of buffer - we will pass bytes there once available
-                this.sslOwnedBuffer = new ArraySegment<byte>(buffer, offset, count);
-                this.readCompletionSource = new TaskCompletionSource<int>(state);
-                this.readCallback = callback;
-                return this.readCompletionSource.Task;
-            }
-
-            public override int EndRead(IAsyncResult asyncResult)
-            {
-                SynchronousAsyncResult<int> syncResult = this.syncReadResult;
-                if (ReferenceEquals(asyncResult, syncResult))
-                {
-                    return syncResult.Result;
-                }
-
-                Debug.Assert(this.readCompletionSource == null || this.readCompletionSource.Task == asyncResult);
-                Contract.Assert(!((Task<int>)asyncResult).IsCanceled);
-
-                try
-                {
-                    return ((Task<int>)asyncResult).Result;
-                }
-                catch (AggregateException ex)
-                {
-                    ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-                    throw; // unreachable
-                }
-            }
-
-            IAsyncResult PrepareSyncReadResult(int readBytes, object state)
-            {
-                // it is safe to reuse sync result object as it can't lead to leak (no way to attach to it via handle)
-                SynchronousAsyncResult<int> result = this.syncReadResult ?? (this.syncReadResult = new SynchronousAsyncResult<int>());
-                result.Result = readBytes;
-                result.AsyncState = state;
-                return result;
-            }
-#endif
-
-            public override void Write(byte[] buffer, int offset, int count) => this.owner.FinishWrap(buffer, offset, count);
-
-            public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-                => this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
-
-#if !NETSTANDARD2_0
-            static readonly Action<Task, object> WriteCompleteCallback = HandleChannelWriteComplete;
-
-            public override IAsyncResult BeginWrite(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
-            {
-                Task task = this.WriteAsync(buffer, offset, count);
-                switch (task.Status)
-                {
-                    case TaskStatus.RanToCompletion:
-                        // write+flush completed synchronously (and successfully)
-                        var result = new SynchronousAsyncResult<int>();
-                        result.AsyncState = state;
-                        callback?.Invoke(result);
-                        return result;
-                    default:
-                        if (callback != null || state != task.AsyncState)
+                        if (currentReadFuture.IsCompleted)
                         {
-                            Contract.Assert(this.writeCompletion == null);
-                            this.writeCallback = callback;
-                            var tcs = new TaskCompletionSource(state);
-                            this.writeCompletion = tcs;
-                            task.ContinueWith(WriteCompleteCallback, this, TaskContinuationOptions.ExecuteSynchronously);
-                            return tcs.Task;
+                            int read = currentReadFuture.Result;
+                            if (read == 0)
+                            {
+                                return;
+                            }
+
+                            outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + read);
+                            if (outputBuffer.IsReadable())
+                            {
+                                this.firedChannelRead = true;
+                                ctx.FireChannelRead(outputBuffer);
+                            }
+                            else
+                            {
+                                outputBuffer.SafeRelease();
+                            }
+
+                            sourceReadableBytes -= read;
                         }
                         else
                         {
-                            return task;
+                            // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
+                            this.pendingSslStreamReadBuffer = outputBuffer;
+                            this.pendingSslStreamReadFuture = currentReadFuture;
+                            return;
                         }
-                }
-            }
-
-            static void HandleChannelWriteComplete(Task writeTask, object state)
-            {
-                var self = (MediationStream)state;
-
-                AsyncCallback callback = self.writeCallback;
-                self.writeCallback = null;
-
-                var promise = self.writeCompletion;
-                self.writeCompletion = null;
-
-                switch (writeTask.Status)
-                {
-                    case TaskStatus.RanToCompletion:
-                        promise.TryComplete();
-                        break;
-                    case TaskStatus.Canceled:
-                        promise.TrySetCanceled();
-                        break;
-                    case TaskStatus.Faulted:
-                        promise.TrySetException(writeTask.Exception);
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException("Unexpected task status: " + writeTask.Status);
-                }
-
-                callback?.Invoke(promise.Task);
-            }
-
-            public override void EndWrite(IAsyncResult asyncResult)
-            {
-                if (asyncResult is SynchronousAsyncResult<int>)
-                {
-                    return;
-                }
-
-                try
-                {
-                    ((Task)asyncResult).Wait();
-                }
-                catch (AggregateException ex)
-                {
-                    ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-                    throw;
-                }
-            }
-#endif
-
-            int ReadFromInput(byte[] destination, int destinationOffset, int destinationCapacity)
-            {
-                Contract.Assert(destination != null);
-
-                byte[] source = this.input;
-                int readableBytes = this.SourceReadableBytes;
-                int length = Math.Min(readableBytes, destinationCapacity);
-                Buffer.BlockCopy(source, this.inputStartOffset + this.inputOffset, destination, destinationOffset, length);
-                this.inputOffset += length;
-                return length;
-            }
-
-            public override void Flush()
-            {
-                // NOOP: called on SslStream.Close
-            }
-
-            protected override void Dispose(bool disposing)
-            {
-                base.Dispose(disposing);
-                if (disposing)
-                {
-                    TaskCompletionSource<int> p = this.readCompletionSource;
-                    if (p != null)
-                    {
-                        this.readCompletionSource = null;
-                        p.TrySetResult(0);
                     }
                 }
             }
-
-#region plumbing
-
-            public override long Seek(long offset, SeekOrigin origin)
+            catch (Exception ex)
             {
-                throw new NotSupportedException();
+                this.HandleFailure(ex);
             }
-
-            public override void SetLength(long value)
-            {
-                throw new NotSupportedException();
-            }
-
-            public override int Read(byte[] buffer, int offset, int count)
-            {
-                throw new NotSupportedException();
-            }
-
-            public override bool CanRead => true;
-
-            public override bool CanSeek => false;
-
-            public override bool CanWrite => true;
-
-            public override long Length
-            {
-                get { throw new NotSupportedException(); }
-            }
-
-            public override long Position
-            {
-                get { throw new NotSupportedException(); }
-                set { throw new NotSupportedException(); }
-            }
-
-#endregion
-
-#region sync result
-            sealed class SynchronousAsyncResult<T> : IAsyncResult
-            {
-                public T Result { get; set; }
-
-                public bool IsCompleted => true;
-
-                public WaitHandle AsyncWaitHandle
-                {
-                    get { throw new InvalidOperationException("Cannot wait on a synchronous result."); }
-                }
-
-                public object AsyncState { get; set; }
-
-                public bool CompletedSynchronously => true;
-            }
-
-#endregion
         }
     }
 

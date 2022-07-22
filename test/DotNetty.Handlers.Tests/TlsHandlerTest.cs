@@ -69,7 +69,6 @@ namespace DotNetty.Handlers.Tests
                 select new object[] { frameLengths, isClient, writeStrategyFactory(), protocol.Item1, protocol.Item2 };
         }
 
-
         [Theory]
         [MemberData(nameof(GetTlsReadTestData))]
         public async Task TlsRead(int[] frameLengths, bool isClient, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol)
@@ -112,7 +111,7 @@ namespace DotNetty.Handlers.Tests
             }
             finally
             {
-                await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
+               await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
 
@@ -277,6 +276,7 @@ namespace DotNetty.Handlers.Tests
                     while(true)
                     {
                         output = await readFunc().WithTimeout(readTimeout);//inbound ? ch.ReadInbound<IByteBuffer>() : ch.ReadOutbound<IByteBuffer>();
+                        
                         if (output == null)
                             break;
 
