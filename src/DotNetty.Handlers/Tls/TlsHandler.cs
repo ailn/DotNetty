@@ -25,7 +25,6 @@ namespace DotNetty.Handlers.Tls
 
     public sealed partial class TlsHandler : ByteToMessageDecoder
     {
-        readonly object sync = new object();
         readonly TlsSettings settings;
         const int FallbackReadBufferSize = 256;
         const int UnencryptedWriteBatchSize = 14 * 1024;
@@ -139,7 +138,7 @@ namespace DotNetty.Handlers.Tls
         {
             var self = (TlsHandler)state;
             
-            lock (self.sync)
+            lock (self)
             {
                 Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
                 switch (task.Status)
@@ -155,7 +154,7 @@ namespace DotNetty.Handlers.Tls
                         // This is for the case when we fed some app-data bytes to mediation stream and
                         // there are no more in the pipeline. Hence, we need to decrypt those and write to
                         // the output. If there are more messages in the pipeline Unwrap will
-                        // handle those first anyway. 
+                        // handle those after this completes as it's behind same lock. 
                         self.UnwrapPending(self.capturedContext);
 #endif
 
@@ -356,46 +355,48 @@ namespace DotNetty.Handlers.Tls
 
             try
             {
-                int outputBufferLength;
-                while (!ctx.Removed && 0 < (outputBufferLength = this.mediationStream.SourceReadableBytes))
+                while (this.mediationStream.SourceIsReadable)
                 {
-                    Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} SourceReadableBytes: {outputBufferLength}");
-                    if (outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+                    int sourceReadableBytes = this.mediationStream.SourceReadableBytes;
+                    while (sourceReadableBytes > 0)
                     {
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH");
-                        outputBufferLength = TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH;
-                    }
-                    IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
-                    Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
+                        int outputBufferLength = Math.Min(sourceReadableBytes, TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH);
+                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} outputBufferLength: {outputBufferLength}");
 
-                    if (currentReadFuture.IsCompleted)
-                    {
-                        int read = currentReadFuture.Result;
-                        if (read == 0)
+                        IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
+                        Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
+
+                        if (currentReadFuture.IsCompleted)
                         {
-                            return;
-                        }
-                        
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.Result: {read}");
-                        outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + read);
-                        if (outputBuffer.IsReadable())
-                        {
-                            this.firedChannelRead = true;
-                            ctx.FireChannelRead(outputBuffer);
+                            int read = currentReadFuture.Result;
+                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.Result: {read}");
+                            if (read == 0)
+                            {
+                                return;
+                            }
+
+                            outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + read);
+                            if (outputBuffer.IsReadable())
+                            {
+                                this.firedChannelRead = true;
+                                ctx.FireChannelRead(outputBuffer);
+                            }
+                            else
+                            {
+                                outputBuffer.SafeRelease();
+                            }
+
+                            sourceReadableBytes -= read;
                         }
                         else
                         {
-                            outputBuffer.SafeRelease();
-                        }
-                    }
-                    else
-                    {
-                        // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.IsCompleted: false");
+                            // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
+                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.IsCompleted: false");
 
-                        this.pendingSslStreamReadBuffer = outputBuffer;
-                        this.pendingSslStreamReadFuture = currentReadFuture;
-                        break;
+                            this.pendingSslStreamReadBuffer = outputBuffer;
+                            this.pendingSslStreamReadFuture = currentReadFuture;
+                            return;
+                        }
                     }
                 }
             }
@@ -411,7 +412,7 @@ namespace DotNetty.Handlers.Tls
         {
             Contract.Requires(packetLengths.Count > 0);
 
-            lock (this.sync)
+            lock (this)
             {
                 Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} offset: {offset}, length: {length}");
 
@@ -456,19 +457,20 @@ namespace DotNetty.Handlers.Tls
                     else
                     {
 #if NET5_0_OR_GREATER
-                        // Check if there are any readable bytes in the stream. If there are, those should be decrypted
-                        outputBufferLength = this.mediationStream.SourceReadableBytes;
-                        if (outputBufferLength > 0)
-                        {
-                            if (outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
-                            {
-                                outputBufferLength = TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH;
-                            }
-
-                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} SourceReadableBytes: {outputBufferLength}");
-                            outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
-                            currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
-                        }
+                        // // Check if there are any readable bytes in the stream. If there are, those should be decrypted
+                        // outputBufferLength = this.mediationStream.SourceReadableBytes;
+                        // if (outputBufferLength > 0)
+                        // {
+                        //     if (outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+                        //     {
+                        //         Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH");
+                        //     }
+                        //
+                        //     Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} SourceReadableBytes: {outputBufferLength}");
+                        //     outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
+                        //     currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
+                        // }
+                        outputBufferLength = 0;
 #else
                         outputBufferLength = 0;
 #endif
@@ -606,7 +608,7 @@ namespace DotNetty.Handlers.Tls
         {
             Trace(nameof(TlsHandler), $"{nameof(this.Read)}");
 
-            lock (this.sync)
+            lock (this)
             {
                 TlsHandlerState oldState = this.state;
                 if (!oldState.HasAny(TlsHandlerState.AuthenticationCompleted))
@@ -657,7 +659,7 @@ namespace DotNetty.Handlers.Tls
                 return TaskEx.FromException(new UnsupportedMessageTypeException(message, typeof(IByteBuffer)));
             }
 
-            lock (this.sync)
+            lock (this)
             {
                 return this.pendingUnencryptedWrites.Add(message);
             }
@@ -665,7 +667,7 @@ namespace DotNetty.Handlers.Tls
 
         public override void Flush(IChannelHandlerContext context)
         {
-            lock (this.sync)
+            lock (this)
             {
                 Trace(nameof(TlsHandler), $"{nameof(this.Flush)}");
 

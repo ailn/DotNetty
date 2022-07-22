@@ -31,7 +31,7 @@ namespace DotNetty.Handlers.Tls
                 {
                     lock (this)
                     {
-                        return this.source?.IsReadable ?? false;
+                        return this.source.IsReadable;
                     }
                 }
             }
@@ -221,13 +221,16 @@ namespace DotNetty.Handlers.Tls
 
                 public void Expand(int count)
                 {
+                    Contract.Assert(this.sources.Last != null); // AddSource is always called before
+                    
                     // Always expand the last added source
-                    this.sources.Last?.Value.Expand(count);
+                    this.sources.Last.Value.Expand(count);
                 }
 
                 public int GetTotalReadableBytes()
                 {
                     int count = 0;
+                    
                     LinkedListNode<Source> node = this.sources.First;
                     while (node != null)
                     {
