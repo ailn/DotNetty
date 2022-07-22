@@ -364,6 +364,10 @@ namespace DotNetty.Handlers.Tls
                         Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} outputBufferLength: {outputBufferLength}");
 
                         IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
+                        // NOTE: SslStream gives bigger buffer than a packed, hence, MediationStreamNet will try to
+                        // fill it up. This may result in all mediationStream.SourceReadableBytes fed up to the
+                        // SslStream, however it'll return outputBufferLength at most. Hence, we need to subtract and
+                        // keep calling ReadFromSslStreamAsync for the rest of sourceReadableBytes.
                         Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
 
                         if (currentReadFuture.IsCompleted)
