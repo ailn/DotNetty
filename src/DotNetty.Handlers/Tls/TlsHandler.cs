@@ -325,61 +325,6 @@ namespace DotNetty.Handlers.Tls
             }
         }
 
-        void UnwrapPending(IChannelHandlerContext ctx)
-        {
-            try
-            {
-                while (this.mediationStream.SourceIsReadable)
-                {
-                    int sourceReadableBytes = this.mediationStream.SourceReadableBytes;
-                    while (sourceReadableBytes > 0)
-                    {
-                        int outputBufferLength = Math.Min(sourceReadableBytes, FallbackReadBufferSize);
-
-                        IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
-                        // NOTE: SslStream gives bigger buffer than a packed, hence, MediationStreamNet will try to
-                        // fill it up. This may result in all mediationStream.SourceReadableBytes fed up to the
-                        // SslStream, however it'll return outputBufferLength at most. Hence, we need to subtract and
-                        // keep calling ReadFromSslStreamAsync for the rest of sourceReadableBytes.
-                        Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
-
-                        if (currentReadFuture.IsCompleted)
-                        {
-                            int read = currentReadFuture.Result;
-                            if (read == 0)
-                            {
-                                return;
-                            }
-
-                            outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + read);
-                            if (outputBuffer.IsReadable())
-                            {
-                                this.firedChannelRead = true;
-                                ctx.FireChannelRead(outputBuffer);
-                            }
-                            else
-                            {
-                                outputBuffer.SafeRelease();
-                            }
-
-                            sourceReadableBytes -= read;
-                        }
-                        else
-                        {
-                            // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
-                            this.pendingSslStreamReadBuffer = outputBuffer;
-                            this.pendingSslStreamReadFuture = currentReadFuture;
-                            return;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                this.HandleFailure(ex);
-            }
-        }
-
         /// <summary>Unwraps inbound SSL records.</summary>
         void Unwrap(IChannelHandlerContext ctx, IByteBuffer packet, int offset, int length, List<int> packetLengths, List<object> output)
         {
@@ -759,6 +704,61 @@ namespace DotNetty.Handlers.Tls
                 this.state = (this.state | TlsHandlerState.FailedAuthentication) & ~TlsHandlerState.Authenticating;
                 this.capturedContext.FireUserEventTriggered(new TlsHandshakeCompletionEvent(cause));
                 this.CloseAsync(this.capturedContext);
+            }
+        }
+        
+        void UnwrapPending(IChannelHandlerContext ctx)
+        {
+            try
+            {
+                while (this.mediationStream.SourceIsReadable)
+                {
+                    int sourceReadableBytes = this.mediationStream.SourceReadableBytes;
+                    while (sourceReadableBytes > 0)
+                    {
+                        int outputBufferLength = Math.Min(sourceReadableBytes, FallbackReadBufferSize);
+
+                        IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
+                        // NOTE: SslStream gives bigger buffer than a packed, hence, MediationStreamNet will try to
+                        // fill it up. This may result in all mediationStream.SourceReadableBytes fed up to the
+                        // SslStream, however it'll return outputBufferLength at most. Hence, we need to subtract and
+                        // keep calling ReadFromSslStreamAsync for the rest of sourceReadableBytes.
+                        Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
+
+                        if (currentReadFuture.IsCompleted)
+                        {
+                            int read = currentReadFuture.Result;
+                            if (read == 0)
+                            {
+                                return;
+                            }
+
+                            outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + read);
+                            if (outputBuffer.IsReadable())
+                            {
+                                this.firedChannelRead = true;
+                                ctx.FireChannelRead(outputBuffer);
+                            }
+                            else
+                            {
+                                outputBuffer.SafeRelease();
+                            }
+
+                            sourceReadableBytes -= read;
+                        }
+                        else
+                        {
+                            // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
+                            this.pendingSslStreamReadBuffer = outputBuffer;
+                            this.pendingSslStreamReadFuture = currentReadFuture;
+                            return;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                this.HandleFailure(ex);
             }
         }
     }
