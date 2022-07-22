@@ -293,10 +293,6 @@ namespace DotNetty.Handlers.Tests
             }
             writeTasks.Clear();
 
-            // TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "Waiting for handler handshake to be completed");
-            // await tlsHandler.HandshakeCompletedFuture.WithTimeout(TimeSpan.FromSeconds(2));
-            // TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "Handler handshake completed");
-
             return Tuple.Create(ch, driverStream);
         }
 
