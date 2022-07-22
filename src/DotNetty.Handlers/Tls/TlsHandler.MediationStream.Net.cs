@@ -51,7 +51,6 @@ namespace DotNetty.Handlers.Tls
             {
                 lock (this)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.SetSource)} source.Length: {source.Length}, offset: {offset}");
                     this.source.AddSource(source, offset);
                 }
             }
@@ -60,7 +59,6 @@ namespace DotNetty.Handlers.Tls
             {
                 lock (this)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.ResetSource)}");
                     this.source.CleanUp();
                 }
             }
@@ -69,8 +67,6 @@ namespace DotNetty.Handlers.Tls
             {
                 lock (this)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
-
                     this.source.Expand(count);
 
                     Memory<byte> sslMemory = this.sslOwnedMemory;
@@ -102,14 +98,10 @@ namespace DotNetty.Handlers.Tls
                 {
                     if (this.SourceIsReadable)
                     {
-                        Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
-
                         // we have the bytes available upfront - write out synchronously
                         int read = this.ReadFromInput(buffer);
                         return new ValueTask<int>(read);
                     }
-
-                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
 
                     Contract.Assert(this.sslOwnedMemory.IsEmpty);
                     // take note of buffer - we will pass bytes there once available
@@ -120,23 +112,13 @@ namespace DotNetty.Handlers.Tls
             }
 
             public override void Write(byte[] buffer, int offset, int count)
-            {
-                Trace(nameof(MediationStream), $"{nameof(this.Write)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-                this.owner.FinishWrap(buffer, offset, count);
-            }
+                => this.owner.FinishWrap(buffer, offset, count);
 
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-            {
-                Trace(nameof(MediationStream), $"{nameof(this.WriteAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-                return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
-            }
+                => this.owner.FinishWrapNonAppDataAsync(buffer, offset, count); 
 
-            int ReadFromInput(Memory<byte> destination)
-            {
-                int read = this.source.Read(destination);
-                Trace(nameof(MediationStream), $"{nameof(this.ReadFromInput)} buffer.Length: {destination.Length}, read: {read}");
-                return read;
-            }
+            int ReadFromInput(Memory<byte> destination) 
+                => this.source.Read(destination);
 
             public override void Flush()
             {

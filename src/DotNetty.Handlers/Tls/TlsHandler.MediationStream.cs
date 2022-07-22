@@ -42,8 +42,6 @@ namespace DotNetty.Handlers.Tls
 
             public override void SetSource(byte[] source, int offset)
             {
-                Trace(nameof(MediationStream), $"{nameof(this.SetSource)} source.Length: {source.Length}, offset: {offset}");
-                
                 this.input = source;
                 this.inputStartOffset = offset;
                 this.inputOffset = 0;
@@ -52,8 +50,6 @@ namespace DotNetty.Handlers.Tls
 
             public override void ResetSource()
             {
-                Trace(nameof(MediationStream), $"{nameof(this.ResetSource)}");
-                
                 this.input = null;
                 this.inputLength = 0;
                 this.inputOffset = 0;
@@ -62,8 +58,6 @@ namespace DotNetty.Handlers.Tls
             public override void ExpandSource(int count)
             {
                 Contract.Assert(this.input != null);
-                
-                Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
 
                 this.inputLength += count;
 
@@ -107,14 +101,10 @@ namespace DotNetty.Handlers.Tls
             {
                 if (this.SourceReadableBytes > 0)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}, SourceReadableBytes: {this.SourceReadableBytes}. ReadFromInput");
-                    
                     // we have the bytes available upfront - write out synchronously
                     int read = this.ReadFromInput(buffer, offset, count);
                     return Task.FromResult(read);
                 }
-
-                Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}, SourceReadableBytes: {this.SourceReadableBytes}. readCompletionSource");
                 
                 Contract.Assert(this.sslOwnedBuffer.Array == null);
                 // take note of buffer - we will pass bytes there once available
@@ -175,16 +165,10 @@ namespace DotNetty.Handlers.Tls
 #endif
 
             public override void Write(byte[] buffer, int offset, int count)
-            {
-                Trace(nameof(MediationStream), $"{nameof(this.Write)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-                this.owner.FinishWrap(buffer, offset, count);
-            }
+                => this.owner.FinishWrap(buffer, offset, count);
 
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-            {
-                Trace(nameof(MediationStream), $"{nameof(this.WriteAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-                return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
-            }
+                => this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
 
 #if !(NETSTANDARD2_0 || NETCOREAPP3_1)
             static readonly Action<Task, object> WriteCompleteCallback = HandleChannelWriteComplete;

@@ -73,10 +73,6 @@ namespace DotNetty.Handlers.Tests
         [MemberData(nameof(GetTlsReadTestData))]
         public async Task TlsRead(int[] frameLengths, bool isClient, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol)
         {
-            while (TlsHandler.Events.TryDequeue(out _))
-            {
-            }
-
             this.Output.WriteLine($"frameLengths: {string.Join(", ", frameLengths)}");
             this.Output.WriteLine($"isClient: {isClient}");
             this.Output.WriteLine($"writeStrategy: {writeStrategy}");
@@ -113,22 +109,9 @@ namespace DotNetty.Handlers.Tests
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
             }
-            catch (Exception)
-            {
-                while (TlsHandler.Events.TryDequeue(out string msg))
-                {
-                    this.Output.WriteLine(msg);
-                }
-
-                throw;
-            }
             finally
             {
-                // while (TlsHandler.Events.TryDequeue(out string msg))
-                // {
-                //     this.Output.WriteLine(msg);
-                // }
-                await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
+               await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
 
@@ -168,11 +151,6 @@ namespace DotNetty.Handlers.Tests
         [MemberData(nameof(GetTlsWriteTestData))]
         public async Task TlsWrite(int[] frameLengths, bool isClient, SslProtocols serverProtocol, SslProtocols clientProtocol)
         {
-            while (TlsHandler.Events.TryDequeue(out _))
-            {
-            }
-
-            
             this.Output.WriteLine($"frameLengths: {string.Join(", ", frameLengths)}");
             this.Output.WriteLine($"isClient: {isClient}");
             this.Output.WriteLine($"serverProtocol: {serverProtocol}");
@@ -221,21 +199,8 @@ namespace DotNetty.Handlers.Tests
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
             }
-            catch (Exception)
-            {
-                // while (TlsHandler.Events.TryDequeue(out string msg))
-                // {
-                //     this.Output.WriteLine(msg);
-                // }
-
-                throw;
-            }
             finally
             {
-                while (TlsHandler.Events.TryDequeue(out string msg))
-                {
-                    this.Output.WriteLine(msg);
-                }
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
@@ -253,7 +218,6 @@ namespace DotNetty.Handlers.Tests
             IByteBuffer readResultBuffer = Unpooled.Buffer(4 * 1024);
             Func<ArraySegment<byte>, Task<int>> readDataFunc = async output =>
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "readDataFunc");
                 if (writeTasks.Count > 0)
                 {
                     await Task.WhenAll(writeTasks).WithTimeout(TestTimeout);
@@ -271,7 +235,6 @@ namespace DotNetty.Handlers.Tests
             };
             var mediationStream = new MediationStream(readDataFunc, input =>
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
                 Task task = executor.SubmitAsync(() => writeStrategy.WriteToChannelAsync(ch, input)).Unwrap();
                 writeTasks.Add(task);
                 return task;
@@ -283,12 +246,10 @@ namespace DotNetty.Handlers.Tests
             var driverStream = new SslStream(mediationStream, true, (_1, _2, _3, _4) => true);
             if (isClient)
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "AuthenticateAsServerAsync");
                 await Task.Run(() => driverStream.AuthenticateAsServerAsync(tlsCertificate, false, serverProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
             }
             else
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "AuthenticateAsClientAsync");
                 await Task.Run(() => driverStream.AuthenticateAsClientAsync(targetHost, null, clientProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
             }
             writeTasks.Clear();
@@ -315,7 +276,6 @@ namespace DotNetty.Handlers.Tests
                     while(true)
                     {
                         output = await readFunc().WithTimeout(readTimeout);//inbound ? ch.ReadInbound<IByteBuffer>() : ch.ReadOutbound<IByteBuffer>();
-                        TlsHandler.Trace("Test" + nameof(ReadOutboundAsync), $"output?.IsReadable: {output?.IsReadable()}");
                         
                         if (output == null)
                             break;
