@@ -15,7 +15,7 @@ namespace DotNetty.Handlers.Tls
     {
         sealed class MediationStreamNet : MediationStreamBase
         {
-            readonly CompositeSource source = new CompositeSource();
+            readonly CompositeSource source = new();
             TaskCompletionSource<int> readCompletionSource;
             Memory<byte> sslOwnedMemory;
             int readByteCount;
@@ -96,7 +96,7 @@ namespace DotNetty.Handlers.Tls
                 }
             }
 
-            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = new CancellationToken())
+            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
                 lock (this)
                 {

@@ -140,15 +140,13 @@ namespace DotNetty.Handlers.Tls
             return false;
         }
 
-        Stopwatch hsSw;
-
         static void HandleHandshakeCompleted(Task task, object state)
         {
             var self = (TlsHandler)state;
 
             lock (self)
             {
-                Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}, Elapsed: {self.hsSw.Elapsed}");
+                Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
                 switch (task.Status)
                 {
                     case TaskStatus.RanToCompletion:
@@ -224,114 +222,111 @@ namespace DotNetty.Handlers.Tls
 
         protected override void Decode(IChannelHandlerContext context, IByteBuffer input, List<object> output)
         {
-            lock (this)
+            int startOffset = input.ReaderIndex;
+            int endOffset = input.WriterIndex;
+            int offset = startOffset;
+            int totalLength = 0;
+
+            Trace(nameof(TlsHandler), $"[{Interlocked.Increment(ref this.decode)}] {nameof(this.Decode)} input.ReaderIndex: {input.ReaderIndex}, input.WriterIndex: {input.WriterIndex}, output.Count: {output.Count}");
+
+            List<int> packetLengths;
+            // if we calculated the length of the current SSL record before, use that information.
+            if (this.packetLength > 0)
             {
-                int startOffset = input.ReaderIndex;
-                int endOffset = input.WriterIndex;
-                int offset = startOffset;
-                int totalLength = 0;
-
-                Trace(nameof(TlsHandler), $"[{Interlocked.Increment(ref this.decode)}] {nameof(this.Decode)} input.ReaderIndex: {input.ReaderIndex}, input.WriterIndex: {input.WriterIndex}, output.Count: {output.Count}");
-
-                List<int> packetLengths;
-                // if we calculated the length of the current SSL record before, use that information.
-                if (this.packetLength > 0)
+                if (endOffset - startOffset < this.packetLength)
                 {
-                    if (endOffset - startOffset < this.packetLength)
-                    {
-                        // input does not contain a single complete SSL record
-                        return;
-                    }
-                    else
-                    {
-                        packetLengths = new List<int>(4);
-                        packetLengths.Add(this.packetLength);
-                        offset += this.packetLength;
-                        totalLength = this.packetLength;
-                        this.packetLength = 0;
-                    }
+                    // input does not contain a single complete SSL record
+                    return;
                 }
                 else
                 {
                     packetLengths = new List<int>(4);
+                    packetLengths.Add(this.packetLength);
+                    offset += this.packetLength;
+                    totalLength = this.packetLength;
+                    this.packetLength = 0;
                 }
+            }
+            else
+            {
+                packetLengths = new List<int>(4);
+            }
 
-                bool nonSslRecord = false;
+            bool nonSslRecord = false;
 
-                while (totalLength < TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+            while (totalLength < TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+            {
+                int readableBytes = endOffset - offset;
+                if (readableBytes < TlsUtils.SSL_RECORD_HEADER_LENGTH)
                 {
-                    int readableBytes = endOffset - offset;
-                    if (readableBytes < TlsUtils.SSL_RECORD_HEADER_LENGTH)
-                    {
-                        break;
-                    }
-
-                    int encryptedPacketLength = TlsUtils.GetEncryptedPacketLength(input, offset);
-                    if (encryptedPacketLength == -1)
-                    {
-                        nonSslRecord = true;
-                        break;
-                    }
-
-                    Contract.Assert(encryptedPacketLength > 0);
-
-                    if (encryptedPacketLength > readableBytes)
-                    {
-                        // wait until the whole packet can be read
-                        this.packetLength = encryptedPacketLength;
-                        break;
-                    }
-
-                    int newTotalLength = totalLength + encryptedPacketLength;
-                    if (newTotalLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
-                    {
-                        // Don't read too much.
-                        break;
-                    }
-
-                    // 1. call unwrap with packet boundaries - call SslStream.ReadAsync only once.
-                    // 2. once we're through all the whole packets, switch to reading out using fallback sized buffer
-
-                    // We have a whole packet.
-                    // Increment the offset to handle the next packet.
-                    packetLengths.Add(encryptedPacketLength);
-                    offset += encryptedPacketLength;
-                    totalLength = newTotalLength;
+                    break;
                 }
 
-                if (totalLength > 0)
+                int encryptedPacketLength = TlsUtils.GetEncryptedPacketLength(input, offset);
+                if (encryptedPacketLength == -1)
                 {
-                    // The buffer contains one or more full SSL records.
-                    // Slice out the whole packet so unwrap will only be called with complete packets.
-                    // Also directly reset the packetLength. This is needed as unwrap(..) may trigger
-                    // decode(...) again via:
-                    // 1) unwrap(..) is called
-                    // 2) wrap(...) is called from within unwrap(...)
-                    // 3) wrap(...) calls unwrapLater(...)
-                    // 4) unwrapLater(...) calls decode(...)
-                    //
-                    // See https://github.com/netty/netty/issues/1534
-
-                    input.SkipBytes(totalLength);
-                    this.Unwrap(context, input, startOffset, totalLength, packetLengths, output);
-
-                    if (!this.firedChannelRead)
-                    {
-                        // Check first if firedChannelRead is not set yet as it may have been set in a
-                        // previous decode(...) call.
-                        this.firedChannelRead = output.Count > 0;
-                    }
+                    nonSslRecord = true;
+                    break;
                 }
 
-                if (nonSslRecord)
+                Contract.Assert(encryptedPacketLength > 0);
+
+                if (encryptedPacketLength > readableBytes)
                 {
-                    // Not an SSL/TLS packet
-                    var ex = new NotSslRecordException(
-                        "not an SSL/TLS record: " + ByteBufferUtil.HexDump(input));
-                    input.SkipBytes(input.ReadableBytes);
-                    context.FireExceptionCaught(ex);
-                    this.HandleFailure(ex);
+                    // wait until the whole packet can be read
+                    this.packetLength = encryptedPacketLength;
+                    break;
                 }
+
+                int newTotalLength = totalLength + encryptedPacketLength;
+                if (newTotalLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+                {
+                    // Don't read too much.
+                    break;
+                }
+
+                // 1. call unwrap with packet boundaries - call SslStream.ReadAsync only once.
+                // 2. once we're through all the whole packets, switch to reading out using fallback sized buffer
+
+                // We have a whole packet.
+                // Increment the offset to handle the next packet.
+                packetLengths.Add(encryptedPacketLength);
+                offset += encryptedPacketLength;
+                totalLength = newTotalLength;
+            }
+
+            if (totalLength > 0)
+            {
+                // The buffer contains one or more full SSL records.
+                // Slice out the whole packet so unwrap will only be called with complete packets.
+                // Also directly reset the packetLength. This is needed as unwrap(..) may trigger
+                // decode(...) again via:
+                // 1) unwrap(..) is called
+                // 2) wrap(...) is called from within unwrap(...)
+                // 3) wrap(...) calls unwrapLater(...)
+                // 4) unwrapLater(...) calls decode(...)
+                //
+                // See https://github.com/netty/netty/issues/1534
+
+                input.SkipBytes(totalLength);
+                this.Unwrap(context, input, startOffset, totalLength, packetLengths, output);
+
+                if (!this.firedChannelRead)
+                {
+                    // Check first if firedChannelRead is not set yet as it may have been set in a
+                    // previous decode(...) call.
+                    this.firedChannelRead = output.Count > 0;
+                }
+            }
+
+            if (nonSslRecord)
+            {
+                // Not an SSL/TLS packet
+                var ex = new NotSslRecordException(
+                    "not an SSL/TLS record: " + ByteBufferUtil.HexDump(input));
+                input.SkipBytes(input.ReadableBytes);
+                context.FireExceptionCaught(ex);
+                this.HandleFailure(ex);
             }
         }
 
@@ -603,7 +598,6 @@ namespace DotNetty.Handlers.Tls
             TlsHandlerState oldState = this.state;
             if (!oldState.HasAny(TlsHandlerState.AuthenticationStarted))
             {
-                this.hsSw = Stopwatch.StartNew();
                 this.state = oldState | TlsHandlerState.Authenticating;
                 if (this.IsServer)
                 {
