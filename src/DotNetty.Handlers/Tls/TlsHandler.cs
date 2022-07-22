@@ -347,54 +347,52 @@ namespace DotNetty.Handlers.Tls
             }
         }
 
-        readonly object sync = new object();
+        // readonly object sync = new object();
+
         void UnwrapPending(IChannelHandlerContext ctx)
         {
-            lock (this.sync)
+            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ?");
+
+            try
             {
-                Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ?");
-
-                try
+                int outputBufferLength;
+                while (!ctx.Removed && 0 < (outputBufferLength = this.mediationStream.SourceReadableBytes))
                 {
-                    int outputBufferLength;
-                    while (!ctx.Removed && 0 < (outputBufferLength = this.mediationStream.SourceReadableBytes))
-                    {
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} SourceReadableBytes: {outputBufferLength}");
-                        IByteBuffer outputBuffer = Unpooled.Buffer(outputBufferLength);// ctx.Allocator.Buffer(outputBufferLength);
-                        Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
+                    Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} SourceReadableBytes: {outputBufferLength}");
+                    IByteBuffer outputBuffer = Unpooled.Buffer(outputBufferLength); // ctx.Allocator.Buffer(outputBufferLength);
+                    Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
 
-                        if (currentReadFuture.IsCompleted)
+                    if (currentReadFuture.IsCompleted)
+                    {
+                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.Result: {currentReadFuture.Result}");
+                        outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + currentReadFuture.Result);
+                        if (outputBuffer.IsReadable())
                         {
-                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.Result: {currentReadFuture.Result}");
-                            outputBuffer.SetWriterIndex(outputBuffer.WriterIndex + currentReadFuture.Result);
-                            if (outputBuffer.IsReadable())
-                            {
-                                this.firedChannelRead = true;
-                                ctx.FireChannelRead(outputBuffer);
-                            }
-                        }
-                        else
-                        {
-                            // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
-                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.IsCompleted: false");
-                        
-                            this.pendingSslStreamReadBuffer = outputBuffer;
-                            this.pendingSslStreamReadFuture = currentReadFuture;
-                            break;
+                            this.firedChannelRead = true;
+                            ctx.FireChannelRead(outputBuffer);
                         }
                     }
+                    else
+                    {
+                        // This is not expected as we have all the bytes, hence, SslStream should read synchronously.  
+                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} ReadFromSslStreamAsync currentReadFuture.IsCompleted: false");
+
+                        this.pendingSslStreamReadBuffer = outputBuffer;
+                        this.pendingSslStreamReadFuture = currentReadFuture;
+                        break;
+                    }
                 }
-                catch (Exception ex)
-                {
-                    this.HandleFailure(ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                this.HandleFailure(ex);
             }
         }
 
         /// <summary>Unwraps inbound SSL records.</summary>
         void Unwrap(IChannelHandlerContext ctx, IByteBuffer packet, int offset, int length, List<int> packetLengths, List<object> output)
         {
-            lock (this.sync)
+            lock (this)
             {
                 Contract.Requires(packetLengths.Count > 0);
 
