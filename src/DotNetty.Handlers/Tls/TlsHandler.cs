@@ -363,6 +363,11 @@ namespace DotNetty.Handlers.Tls
                 while (!ctx.Removed && 0 < (outputBufferLength = this.mediationStream.SourceReadableBytes))
                 {
                     Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} SourceReadableBytes: {outputBufferLength}");
+                    if (outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+                    {
+                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH");
+                        outputBufferLength = TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH;
+                    }
                     IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength); //Unpooled.Buffer(outputBufferLength); // ctx.Allocator.Buffer(outputBufferLength);
                     Task<int> currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
 
@@ -395,6 +400,11 @@ namespace DotNetty.Handlers.Tls
                         this.pendingSslStreamReadFuture = currentReadFuture;
                         break;
                     }
+                }
+
+                if (!ctx.Removed)
+                {
+                    ctx.Read();
                 }
             }
             catch (Exception ex)
@@ -456,6 +466,10 @@ namespace DotNetty.Handlers.Tls
                     outputBufferLength = this.mediationStream.SourceReadableBytes;
                     if (outputBufferLength > 0)
                     {
+                        if (outputBufferLength > TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH)
+                        {
+                            outputBufferLength = TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH;
+                        }
                         Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} SourceReadableBytes: {outputBufferLength}");
                         outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
                         currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
