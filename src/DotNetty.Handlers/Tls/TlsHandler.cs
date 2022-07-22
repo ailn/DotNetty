@@ -348,8 +348,6 @@ namespace DotNetty.Handlers.Tls
 
                     while (!this.EnsureAuthenticated())
                     {
-                        // Due to SslStream's implementation, it's possible that we expand after handshake completed. Hence, we
-                        // need to make sure we call ReadFromSslStreamAsync for these packets later
                         this.mediationStream.ExpandSource(packetLengths[packetIndex]);
                         if (++packetIndex == packetLengths.Count)
                         {
