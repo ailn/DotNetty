@@ -360,7 +360,8 @@ namespace DotNetty.Handlers.Tls
                     int sourceReadableBytes = this.mediationStream.SourceReadableBytes;
                     while (sourceReadableBytes > 0)
                     {
-                        int outputBufferLength = Math.Min(sourceReadableBytes, TlsUtils.MAX_ENCRYPTED_PACKET_LENGTH);
+                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} sourceReadableBytes: {sourceReadableBytes}");
+                        int outputBufferLength = Math.Min(sourceReadableBytes, FallbackReadBufferSize);
                         Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.UnwrapPending)} outputBufferLength: {outputBufferLength}");
 
                         IByteBuffer outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
@@ -474,6 +475,10 @@ namespace DotNetty.Handlers.Tls
                         //     outputBuffer = ctx.Allocator.Buffer(outputBufferLength);
                         //     currentReadFuture = this.ReadFromSslStreamAsync(outputBuffer, outputBufferLength);
                         // }
+                        if (this.mediationStream.SourceReadableBytes > 0)
+                        {
+                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} SourceReadableBytes: {this.mediationStream.SourceReadableBytes}");
+                        }
                         outputBufferLength = 0;
 #else
                         outputBufferLength = 0;
