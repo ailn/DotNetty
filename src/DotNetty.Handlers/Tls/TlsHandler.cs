@@ -171,6 +171,7 @@ namespace DotNetty.Handlers.Tls
                         //     self.capturedContext.Executor.Execute(() => HandleHandshakeRanToCompletion(self, oldState));
                         // }
                         self.capturedContext.Executor.Execute(() => HandleHandshakeRanToCompletion(self, oldState));
+                        self.capturedContext.Read();
                         break;
                     }
                     case TaskStatus.Canceled:
@@ -448,7 +449,7 @@ namespace DotNetty.Handlers.Tls
         /// <summary>Unwraps inbound SSL records.</summary>
         void Unwrap(IChannelHandlerContext ctx, IByteBuffer packet, int offset, int length, List<(int packetLength, byte type)> packetLengths, List<object> output)
         {
-            Contract.Requires(packetLengths.Count > 0);
+            Contract.Requires(packetLengths.Count > 0 || this.pendingDataPackets != null);
 
             lock (this)
             {
@@ -488,21 +489,6 @@ namespace DotNetty.Handlers.Tls
                                 return;
                             }
                         }
-                    }
-
-                    if (this.pendingDataPackets != null)
-                    {
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} PendingDataPackets: {pendingDataPackets.Count}");
-                        
-                        // add packetLengths to pending except already processed
-                        for (int i = packetIndex; i < packetLengths.Count; i++)
-                        {
-                            this.pendingDataPackets.Add(packetLengths[i]);
-                        }
-                        
-                        packetLengths = this.pendingDataPackets;
-                        this.pendingDataPackets = null;
-                        packetIndex = 0;
                     }
 
                     Task<int> currentReadFuture = this.pendingSslStreamReadFuture;
@@ -546,13 +532,35 @@ namespace DotNetty.Handlers.Tls
 #endif
                     }
                     
-                    
-
                     // go through packets one by one (because SslStream does not consume more than 1 packet at a time)
+                    // account pendingDataPackets
+                    int skipExpandPacketCount = 0;
+                    if (this.pendingDataPackets != null)
+                    {
+                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} PendingDataPackets: {this.pendingDataPackets.Count}");
+                        // We already expanded the source for all pendingDataPackets, so skip expand further below
+                        skipExpandPacketCount = this.pendingDataPackets.Count;
+                        
+                        // add packetLengths to pending except already processed
+                        for (int i = packetIndex; i < packetLengths.Count; i++)
+                        {
+                            this.pendingDataPackets.Add(packetLengths[i]);
+                        }
+                        
+                        packetLengths = this.pendingDataPackets;
+                        this.pendingDataPackets = null;
+                        packetIndex = 0;
+                    }
+                    
                     for (; packetIndex < packetLengths.Count; packetIndex++)
                     {
                         int currentPacketLength = packetLengths[packetIndex].packetLength;
-                        this.mediationStream.ExpandSource(currentPacketLength);
+                        
+                        if (--skipExpandPacketCount < 0)
+                        {
+                            // For pending packets we already expended, so skip expand 
+                            this.mediationStream.ExpandSource(currentPacketLength);
+                        }
 
                         if (currentReadFuture != null)
                         {

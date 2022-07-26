@@ -91,6 +91,8 @@ namespace DotNetty.Handlers.Tests
                 var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks).WithTimeout(TimeSpan.FromSeconds(10));
                 EmbeddedChannel ch = pair.Item1;
                 SslStream driverStream = pair.Item2;
+                
+                executor.Execute(() => ch.RunPendingTasks());
 
                 int randomSeed = Environment.TickCount;
                 var random = new Random(randomSeed);
@@ -104,7 +106,14 @@ namespace DotNetty.Handlers.Tests
                 }
                 await Task.WhenAll(writeTasks).WithTimeout(TimeSpan.FromSeconds(5));
                 IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
-                await ReadOutboundAsync(async () => ch.ReadInbound<IByteBuffer>(), expectedBuffer.ReadableBytes, finalReadBuffer, TestTimeout);
+                
+                executor.Execute(() => ch.RunPendingTasks());
+                
+                await ReadOutboundAsync(async () =>
+                {
+                    executor.Execute(() => ch.RunPendingTasks());
+                    return ch.ReadInbound<IByteBuffer>();
+                }, expectedBuffer.ReadableBytes, finalReadBuffer, TestTimeout);
                 bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
                 if (!isEqual)
                 {
@@ -189,6 +198,8 @@ namespace DotNetty.Handlers.Tests
                 var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks);
                 EmbeddedChannel ch = pair.Item1;
                 SslStream driverStream = pair.Item2;
+                
+                executor.Execute(() => ch.RunPendingTasks());
 
                 int randomSeed = Environment.TickCount;
                 var random = new Random(randomSeed);
@@ -202,13 +213,17 @@ namespace DotNetty.Handlers.Tests
                         expectedBuffer.WriteBytes(data);
                         return (object)Unpooled.WrappedBuffer(data);
                     }).ToArray());
+                    executor.Execute(() => ch.RunPendingTasks());
                 }
-
+                
+                executor.Execute(() => ch.RunPendingTasks());
+                
                 IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
                 var readBuffer = new byte[16 * 1024 * 10];
                 await ReadOutboundAsync(
                     async () =>
                     {
+                        executor.Execute(() => ch.RunPendingTasks());
                         int read = await driverStream.ReadAsync(readBuffer, 0, readBuffer.Length);
                         return Unpooled.WrappedBuffer(readBuffer, 0, read);
                     },
@@ -256,6 +271,7 @@ namespace DotNetty.Handlers.Tests
                 TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "readDataFunc");
                 if (writeTasks.Count > 0)
                 {
+                    TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc writeTasks: {writeTasks.Count}");
                     await Task.WhenAll(writeTasks).WithTimeout(TestTimeout);
                     writeTasks.Clear();
                 }
@@ -263,7 +279,13 @@ namespace DotNetty.Handlers.Tests
                 if (readResultBuffer.ReadableBytes < output.Count)
                 {
                     if (ch.Active)
-                        await ReadOutboundAsync(async () => ch.ReadOutbound<IByteBuffer>(), output.Count - readResultBuffer.ReadableBytes, readResultBuffer, TestTimeout, readResultBuffer.ReadableBytes != 0 ? 0 : 1);
+                    {
+                        await ReadOutboundAsync(async () =>
+                        {
+                            executor.Execute(() => ch.RunPendingTasks());
+                            return ch.ReadOutbound<IByteBuffer>();
+                        }, output.Count - readResultBuffer.ReadableBytes, readResultBuffer, TestTimeout, readResultBuffer.ReadableBytes != 0 ? 0 : 1);
+                    }
                 }
                 int read = Math.Min(output.Count, readResultBuffer.ReadableBytes);
                 readResultBuffer.ReadBytes(output.Array, output.Offset, read);
@@ -271,8 +293,11 @@ namespace DotNetty.Handlers.Tests
             };
             var mediationStream = new MediationStream(readDataFunc, input =>
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
-                Task task = executor.SubmitAsync(() => writeStrategy.WriteToChannelAsync(ch, input)).Unwrap();
+                Task task = executor.SubmitAsync(() =>
+                {
+                    TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
+                    return writeStrategy.WriteToChannelAsync(ch, input);
+                }).Unwrap();
                 writeTasks.Add(task);
                 return task;
             }, () =>
@@ -315,8 +340,6 @@ namespace DotNetty.Handlers.Tests
                     while(true)
                     {
                         output = await readFunc().WithTimeout(readTimeout);//inbound ? ch.ReadInbound<IByteBuffer>() : ch.ReadOutbound<IByteBuffer>();
-                        TlsHandler.Trace("Test" + nameof(ReadOutboundAsync), $"output?.IsReadable: {output?.IsReadable()}");
-                        
                         if (output == null)
                             break;
 
