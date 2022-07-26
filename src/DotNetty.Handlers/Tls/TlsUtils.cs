@@ -104,5 +104,23 @@ namespace DotNetty.Handlers.Tls
             ctx.FireUserEventTriggered(new TlsHandshakeCompletionEvent(cause));
             ctx.CloseAsync();
         }
+        
+        public static string FormatContentType(byte contentType)
+        {
+            switch (contentType)
+            {
+                case SSL_CONTENT_TYPE_CHANGE_CIPHER_SPEC:
+                    return nameof(SSL_CONTENT_TYPE_CHANGE_CIPHER_SPEC);
+                case SSL_CONTENT_TYPE_ALERT:
+                    return nameof(SSL_CONTENT_TYPE_ALERT);
+                case SSL_CONTENT_TYPE_HANDSHAKE:
+                    return nameof(SSL_CONTENT_TYPE_HANDSHAKE);
+                case SSL_CONTENT_TYPE_APPLICATION_DATA:
+                    return nameof(SSL_CONTENT_TYPE_APPLICATION_DATA);
+                default:
+                    // SSLv2 or bad data
+                    return "non-ssl";
+            }
+        }
     }
 }
