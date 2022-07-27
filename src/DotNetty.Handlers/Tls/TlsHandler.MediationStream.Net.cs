@@ -45,51 +45,57 @@ namespace DotNetty.Handlers.Tls
 
             public override void ExpandSource(int count)
             {
-                Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
-
-                this.source.Expand(count);
-
-                Memory<byte> sslMemory = this.sslOwnedMemory;
-                if (sslMemory.IsEmpty)
+                lock (this)
                 {
-                    // there is no pending read operation - keep for future
-                    return;
+                    Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
+
+                    this.source.Expand(count);
+
+                    Memory<byte> sslMemory = this.sslOwnedMemory;
+                    if (sslMemory.IsEmpty)
+                    {
+                        // there is no pending read operation - keep for future
+                        return;
+                    }
+
+                    this.sslOwnedMemory = default;
+
+                    this.readByteCount = this.ReadFromInput(sslMemory);
+                    // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
+                    new Task(
+                            ms =>
+                            {
+                                var self = (MediationStreamNet)ms;
+                                TaskCompletionSource<int> p = self.readCompletionSource;
+                                self.readCompletionSource = null;
+                                p.TrySetResult(self.readByteCount);
+                            },
+                            this)
+                        .RunSynchronously(TaskScheduler.Default);
                 }
-
-                this.sslOwnedMemory = default;
-
-                this.readByteCount = this.ReadFromInput(sslMemory);
-                // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
-                new Task(
-                        ms =>
-                        {
-                            var self = (MediationStreamNet)ms;
-                            TaskCompletionSource<int> p = self.readCompletionSource;
-                            self.readCompletionSource = null;
-                            p.TrySetResult(self.readByteCount);
-                        },
-                        this)
-                    .RunSynchronously(TaskScheduler.Default);
             }
 
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
-                if (this.SourceIsReadable)
+                lock (this)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
+                    if (this.SourceIsReadable)
+                    {
+                        Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
 
-                    // we have the bytes available upfront - write out synchronously
-                    int read = this.ReadFromInput(buffer);
-                    return new ValueTask<int>(read);
+                        // we have the bytes available upfront - write out synchronously
+                        int read = this.ReadFromInput(buffer);
+                        return new ValueTask<int>(read);
+                    }
+
+                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
+
+                    Contract.Assert(this.sslOwnedMemory.IsEmpty);
+                    // take note of buffer - we will pass bytes there once available
+                    this.sslOwnedMemory = buffer;
+                    this.readCompletionSource = new TaskCompletionSource<int>();
+                    return new ValueTask<int>(this.readCompletionSource.Task);
                 }
-
-                Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
-
-                Contract.Assert(this.sslOwnedMemory.IsEmpty);
-                // take note of buffer - we will pass bytes there once available
-                this.sslOwnedMemory = buffer;
-                this.readCompletionSource = new TaskCompletionSource<int>();
-                return new ValueTask<int>(this.readCompletionSource.Task);
             }
 
             public override void Write(byte[] buffer, int offset, int count)
