@@ -139,14 +139,15 @@ namespace DotNetty.Handlers.Tests
             var lengthVariations =
                 new[]
                 {
-                    new[] { 1 },
-                    new[] { 2, 8000, 300 },
-                    new[] { 100, 0, 1000 },
-                    new[] { 4 * 1024 - 10, 1, -1, 0, -1, 1 },
-                    new[] { 0, 24000, 0, -1, 1000 },
-                    new[] { 0, 4000, 0 },
-                    new[] { 16 * 1024 - 100 },
-                    Enumerable.Repeat(0, 30).Select(_ => random.Next(0, 10) < 2 ? -1 : random.Next(0, 17000)).ToArray()
+                    new[] { 9168, 1671, -1, 4643, 16578, -1, -1, 7238, 4729, 7668, 10674, 9364, 268, 11210, 183, 8898, 9651, 15601, 2774, 2040, -1, 5945, 4409, 11809, 2958, 5664, 9971, 14637, 14461, 4923 }
+                    // new[] { 1 },
+                    // new[] { 2, 8000, 300 },
+                    // new[] { 100, 0, 1000 },
+                    // new[] { 4 * 1024 - 10, 1, -1, 0, -1, 1 },
+                    // new[] { 0, 24000, 0, -1, 1000 },
+                    // new[] { 0, 4000, 0 },
+                    // new[] { 16 * 1024 - 100 },
+                    // Enumerable.Repeat(0, 30).Select(_ => random.Next(0, 10) < 2 ? -1 : random.Next(0, 17000)).ToArray()
                 };
             var boolToggle = new[] { false, true };
             var protocols = new[]
@@ -272,6 +273,7 @@ namespace DotNetty.Handlers.Tests
                 {
                     if (ch.Active)
                     {
+                        TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc ReadOutboundAsync");
                         await ReadOutboundAsync(
                             async () => ch.ReadOutbound<IByteBuffer>(),
                             output.Count - readResultBuffer.ReadableBytes,
@@ -279,25 +281,38 @@ namespace DotNetty.Handlers.Tests
                             TestTimeout,
                             readResultBuffer.ReadableBytes != 0 ? 0 : 1
                         );
+                        TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc ReadOutboundAsync complete");
                     }
                 }
                 int read = Math.Min(output.Count, readResultBuffer.ReadableBytes);
                 readResultBuffer.ReadBytes(output.Array, output.Offset, read);
+                
+                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc read: {read}");
                 return read;
             };
-            var mediationStream = new MediationStream(readDataFunc, input =>
-            {
-                Task task = executor.SubmitAsync(() =>
+            var mediationStream = new MediationStream(
+                output =>
                 {
-                    TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
-                    return writeStrategy.WriteToChannelAsync(ch, input);
-                }).Unwrap();
-                writeTasks.Add(task);
-                return task;
-            }, () =>
-            {
-                ch.CloseAsync();
-            });
+                    Task<int> task = executor.SubmitAsync(
+                        () => readDataFunc(output)
+                    ).Unwrap();
+                    return task;
+                },
+                input =>
+                {
+                    Task task = executor.SubmitAsync(
+                        () =>
+                        {
+                            TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
+                            return writeStrategy.WriteToChannelAsync(ch, input);
+                        }).Unwrap();
+                    writeTasks.Add(task);
+                    return task;
+                },
+                () =>
+                {
+                    ch.CloseAsync();
+                });
 
             var driverStream = new SslStream(mediationStream, true, (_1, _2, _3, _4) => true);
             if (isClient)
