@@ -219,7 +219,7 @@ namespace DotNetty.Handlers.Tls
             sealed class CompositeSource
             {
                 // Why not List?
-                // 1. It's unlikely this list to grow more than 2-3 nodes. In fact in most cases it'll have one element only
+                // 1. It's unlikely this list to grow more than 10 nodes. In fact in most cases it'll have one element only
                 // 2. Cleanup removes from head, so it's cheaper compared to List which shifts elements in this case. 
                 readonly LinkedList<Source> sources = new LinkedList<Source>();
 
