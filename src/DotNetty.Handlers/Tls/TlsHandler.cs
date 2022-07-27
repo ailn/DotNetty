@@ -139,53 +139,110 @@ namespace DotNetty.Handlers.Tls
         static void HandleHandshakeCompleted(Task task, object state)
         {
             var self = (TlsHandler)state;
+            Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
+            self.capturedContext.Executor.Execute(() => HandleHandshakeCompletedInternal(task, self));
             
-            lock (self)
+//             lock (self)
+//             {
+//                 Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
+//                 switch (task.Status)
+//                 {
+//                     case TaskStatus.RanToCompletion:
+//                     {
+//                         TlsHandlerState oldState = self.state;
+//
+//                         Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
+//                         self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
+//
+// #if NET5_0_OR_GREATER
+//                         // This is for the case when we fed some app-data bytes to mediation stream and
+//                         // there are no more in the pipeline. Hence, we need to decrypt those and write to
+//                         // the output. If there are more messages in the pipeline Unwrap will
+//                         // handle those after this completes as it's behind same lock. 
+//                         
+//                         
+//                         // self.UnwrapPending(self.capturedContext);
+// #endif
+//
+//                         // if (self.capturedContext.Executor.InEventLoop)
+//                         // {
+//                         //     HandleHandshakeRanToCompletion(self, oldState);
+//                         // }
+//                         // else
+//                         // {
+//                         //     self.capturedContext.Executor.Execute(() => HandleHandshakeRanToCompletion(self, oldState));
+//                         // }
+//                         self.capturedContext.Executor.Execute(() => HandleHandshakeRanToCompletion(self, oldState));
+//                         self.capturedContext.Read();
+//                         break;
+//                     }
+//                     case TaskStatus.Canceled:
+//                     case TaskStatus.Faulted:
+//                     {
+//                         // ReSharper disable once AssignNullToNotNullAttribute -- task.Exception will be present as task is faulted
+//                         TlsHandlerState oldState = self.state;
+//                         Contract.Assert(!oldState.HasAny(TlsHandlerState.Authenticated));
+//                         self.HandleFailure(task.Exception);
+//                         break;
+//                     }
+//                     default:
+//                         throw new ArgumentOutOfRangeException(nameof(task), "Unexpected task status: " + task.Status);
+//                 }
+//             }
+        }
+
+        static void HandleHandshakeCompletedInternal(Task task, TlsHandler self)
+        {
+            Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompletedInternal)}, state: {self.state}, task.Status: {task.Status}");
+            switch (task.Status)
             {
-                Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
-                switch (task.Status)
+                case TaskStatus.RanToCompletion:
                 {
-                    case TaskStatus.RanToCompletion:
+                    TlsHandlerState oldState = self.state;
+
+                    Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
+                    self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
+
+                    self.capturedContext.FireUserEventTriggered(TlsHandshakeCompletionEvent.Success);
+                    
+                    ThreadLocalObjectList output = ThreadLocalObjectList.NewInstance();
+                    try
                     {
-                        TlsHandlerState oldState = self.state;
-
-                        Contract.Assert(!oldState.HasAny(TlsHandlerState.AuthenticationCompleted));
-                        self.state = (oldState | TlsHandlerState.Authenticated) & ~(TlsHandlerState.Authenticating | TlsHandlerState.FlushedBeforeHandshake);
-
-#if NET5_0_OR_GREATER
-                        // This is for the case when we fed some app-data bytes to mediation stream and
-                        // there are no more in the pipeline. Hence, we need to decrypt those and write to
-                        // the output. If there are more messages in the pipeline Unwrap will
-                        // handle those after this completes as it's behind same lock. 
-                        
-                        
-                        // self.UnwrapPending(self.capturedContext);
-#endif
-
-                        // if (self.capturedContext.Executor.InEventLoop)
-                        // {
-                        //     HandleHandshakeRanToCompletion(self, oldState);
-                        // }
-                        // else
-                        // {
-                        //     self.capturedContext.Executor.Execute(() => HandleHandshakeRanToCompletion(self, oldState));
-                        // }
-                        self.capturedContext.Executor.Execute(() => HandleHandshakeRanToCompletion(self, oldState));
+                        self.Unwrap(self.capturedContext, Unpooled.Empty, 0, 0, new List<(int packetLength, byte type)>(0), output);
+                    }
+                    finally
+                    {
+                        for (int i = 0; i < output.Count; i++)
+                        {
+                            self.capturedContext.FireChannelRead(output[i]);
+                        }
+                        output.Return();
+                    }
+                    
+                    if (oldState.Has(TlsHandlerState.ReadRequestedBeforeAuthenticated) && !self.capturedContext.Channel.Configuration.AutoRead)
+                    {
                         self.capturedContext.Read();
-                        break;
                     }
-                    case TaskStatus.Canceled:
-                    case TaskStatus.Faulted:
+
+                    if (oldState.Has(TlsHandlerState.FlushedBeforeHandshake))
                     {
-                        // ReSharper disable once AssignNullToNotNullAttribute -- task.Exception will be present as task is faulted
-                        TlsHandlerState oldState = self.state;
-                        Contract.Assert(!oldState.HasAny(TlsHandlerState.Authenticated));
-                        self.HandleFailure(task.Exception);
-                        break;
+                        self.Wrap(self.capturedContext);
+                        self.capturedContext.Flush();
                     }
-                    default:
-                        throw new ArgumentOutOfRangeException(nameof(task), "Unexpected task status: " + task.Status);
+
+                    break;
                 }
+                case TaskStatus.Canceled:
+                case TaskStatus.Faulted:
+                {
+                    // ReSharper disable once AssignNullToNotNullAttribute -- task.Exception will be present as task is faulted
+                    TlsHandlerState oldState = self.state;
+                    Contract.Assert(!oldState.HasAny(TlsHandlerState.Authenticated));
+                    self.HandleFailure(task.Exception);
+                    break;
+                }
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(task), "Unexpected task status: " + task.Status);
             }
         }
 

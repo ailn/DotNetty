@@ -83,17 +83,15 @@ namespace DotNetty.Handlers.Tests
             this.Output.WriteLine($"serverProtocol: {serverProtocol}");
             this.Output.WriteLine($"clientProtocol: {clientProtocol}");
 
-            var executor = new SingleThreadEventExecutor("test executor", TimeSpan.FromMilliseconds(10));
+            var executor = new SingleThreadEventLoop("test executor", TimeSpan.FromMilliseconds(10));
 
             try
             {
                 var writeTasks = new List<Task>();
                 var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks).WithTimeout(TimeSpan.FromSeconds(10));
-                EmbeddedChannel ch = pair.Item1;
+                IEmbeddedChannel ch = pair.Item1;
                 SslStream driverStream = pair.Item2;
                 
-                executor.Execute(() => ch.RunPendingTasks());
-
                 int randomSeed = Environment.TickCount;
                 var random = new Random(randomSeed);
                 IByteBuffer expectedBuffer = Unpooled.Buffer(16 * 1024);
@@ -107,13 +105,7 @@ namespace DotNetty.Handlers.Tests
                 await Task.WhenAll(writeTasks).WithTimeout(TimeSpan.FromSeconds(5));
                 IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
                 
-                executor.Execute(() => ch.RunPendingTasks());
-                
-                await ReadOutboundAsync(async () =>
-                {
-                    executor.Execute(() => ch.RunPendingTasks());
-                    return ch.ReadInbound<IByteBuffer>();
-                }, expectedBuffer.ReadableBytes, finalReadBuffer, TestTimeout);
+                await ReadOutboundAsync(async () => ch.ReadInbound<IByteBuffer>(), expectedBuffer.ReadableBytes, finalReadBuffer, TestTimeout);
                 bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
                 if (!isEqual)
                 {
@@ -190,17 +182,15 @@ namespace DotNetty.Handlers.Tests
             var writeStrategy = new AsIsWriteStrategy();
             this.Output.WriteLine($"writeStrategy: {writeStrategy}");
 
-            var executor = new SingleThreadEventExecutor("test executor", TimeSpan.FromMilliseconds(10));
+            var executor = new SingleThreadEventLoop("test executor", TimeSpan.FromMilliseconds(10));
 
             try
             {
                 var writeTasks = new List<Task>();
                 var pair = await SetupStreamAndChannelAsync(isClient, executor, writeStrategy, serverProtocol, clientProtocol, writeTasks);
-                EmbeddedChannel ch = pair.Item1;
+                IEmbeddedChannel ch = pair.Item1;
                 SslStream driverStream = pair.Item2;
                 
-                executor.Execute(() => ch.RunPendingTasks());
-
                 int randomSeed = Environment.TickCount;
                 var random = new Random(randomSeed);
                 IByteBuffer expectedBuffer = Unpooled.Buffer(16 * 1024);
@@ -213,17 +203,13 @@ namespace DotNetty.Handlers.Tests
                         expectedBuffer.WriteBytes(data);
                         return (object)Unpooled.WrappedBuffer(data);
                     }).ToArray());
-                    executor.Execute(() => ch.RunPendingTasks());
                 }
-                
-                executor.Execute(() => ch.RunPendingTasks());
                 
                 IByteBuffer finalReadBuffer = Unpooled.Buffer(16 * 1024);
                 var readBuffer = new byte[16 * 1024 * 10];
                 await ReadOutboundAsync(
                     async () =>
                     {
-                        executor.Execute(() => ch.RunPendingTasks());
                         int read = await driverStream.ReadAsync(readBuffer, 0, readBuffer.Length);
                         return Unpooled.WrappedBuffer(readBuffer, 0, read);
                     },
@@ -231,7 +217,8 @@ namespace DotNetty.Handlers.Tests
                 bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
                 if (!isEqual)
                 {
-                    Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
+                    // Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
+                    Assert.True(isEqual, $"---Expected readablebytes:\n{expectedBuffer.ReadableBytes}\n---Actual readablebytes:\n{finalReadBuffer.ReadableBytes}");
                 }
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
@@ -255,7 +242,7 @@ namespace DotNetty.Handlers.Tests
             }
         }
 
-        static async Task<Tuple<EmbeddedChannel, SslStream>> SetupStreamAndChannelAsync(bool isClient, IEventExecutor executor, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol, List<Task> writeTasks)
+        static async Task<Tuple<IEmbeddedChannel, SslStream>> SetupStreamAndChannelAsync(bool isClient, IEventLoop executor, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol, List<Task> writeTasks)
         {
             X509Certificate2 tlsCertificate = TestResourceHelper.GetTestCertificate();
             string targetHost = tlsCertificate.GetNameInfo(X509NameType.DnsName, false);
@@ -263,7 +250,8 @@ namespace DotNetty.Handlers.Tests
                 new TlsHandler(stream => new SslStream(stream, true, (sender, certificate, chain, errors) => true), new ClientTlsSettings(clientProtocol, false, new List<X509Certificate>(), targetHost)) :
                 new TlsHandler(new ServerTlsSettings(tlsCertificate, false, false, serverProtocol));
             //var ch = new EmbeddedChannel(new LoggingHandler("BEFORE"), tlsHandler, new LoggingHandler("AFTER"));
-            var ch = new EmbeddedChannel(tlsHandler);
+
+            IEmbeddedChannel ch = new SingleThreadedEmbeddedChannel(executor, tlsHandler);
 
             IByteBuffer readResultBuffer = Unpooled.Buffer(4 * 1024);
             Func<ArraySegment<byte>, Task<int>> readDataFunc = async output =>
@@ -280,11 +268,13 @@ namespace DotNetty.Handlers.Tests
                 {
                     if (ch.Active)
                     {
-                        await ReadOutboundAsync(async () =>
-                        {
-                            executor.Execute(() => ch.RunPendingTasks());
-                            return ch.ReadOutbound<IByteBuffer>();
-                        }, output.Count - readResultBuffer.ReadableBytes, readResultBuffer, TestTimeout, readResultBuffer.ReadableBytes != 0 ? 0 : 1);
+                        await ReadOutboundAsync(
+                            async () => ch.ReadOutbound<IByteBuffer>(),
+                            output.Count - readResultBuffer.ReadableBytes,
+                            readResultBuffer,
+                            TestTimeout,
+                            readResultBuffer.ReadableBytes != 0 ? 0 : 1
+                        );
                     }
                 }
                 int read = Math.Min(output.Count, readResultBuffer.ReadableBytes);

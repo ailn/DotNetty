@@ -10,6 +10,8 @@ namespace DotNetty.Handlers.Tls
     using System.IO;
     using System.Threading;
     using System.Threading.Tasks;
+    using DotNetty.Common.Utilities;
+    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     partial class TlsHandler
     {
@@ -122,13 +124,28 @@ namespace DotNetty.Handlers.Tls
             public override void Write(byte[] buffer, int offset, int count)
             {
                 Trace(nameof(MediationStream), $"{nameof(this.Write)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-                this.owner.FinishWrap(buffer, offset, count);
+                if (this.owner.capturedContext.Executor.InEventLoop)
+                {
+                    this.owner.FinishWrap(buffer, offset, count);
+                }
+                else
+                {
+                    this.owner.capturedContext.Executor.Execute(() => this.owner.FinishWrap(buffer, offset, count));
+                }
             }
 
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
                 Trace(nameof(MediationStream), $"{nameof(this.WriteAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-                return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
+                if (this.owner.capturedContext.Executor.InEventLoop)
+                {
+                    return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
+                }
+
+                return this.owner.capturedContext.Executor.SubmitAsync(
+                    () => this.owner.FinishWrapNonAppDataAsync(buffer, offset, count),
+                    cancellationToken
+                ).Unwrap();
             }
 
             int ReadFromInput(Memory<byte> destination)
