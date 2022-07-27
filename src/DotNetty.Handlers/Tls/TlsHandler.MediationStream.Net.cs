@@ -55,6 +55,7 @@ namespace DotNetty.Handlers.Tls
                     if (sslMemory.IsEmpty)
                     {
                         // there is no pending read operation - keep for future
+                        Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} there is no pending read operation - keep for future");
                         return;
                     }
 
