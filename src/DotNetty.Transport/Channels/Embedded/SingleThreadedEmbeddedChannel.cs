@@ -99,7 +99,7 @@ namespace DotNetty.Transport.Channels.Embedded
             this.Setup(register, handlers);
         }
 
-        public SingleThreadedEmbeddedChannel(IChannelId id, bool hasDisconnect, IChannelConfiguration config, SingleThreadEventLoop eventLoop = null,
+        public SingleThreadedEmbeddedChannel(IChannelId id, bool hasDisconnect, IChannelConfiguration config, IEventLoop eventLoop = null,
             params IChannelHandler[] handlers)
             : base(null, id)
         {
@@ -139,7 +139,7 @@ namespace DotNetty.Transport.Channels.Embedded
             {
                 Task future = this.loop.RegisterAsync(this);
                 future.GetAwaiter().GetResult();
-                // Debug.Assert(future.IsCompleted);
+                Debug.Assert(future.IsCompleted);
             }
         }
 

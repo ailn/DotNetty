@@ -139,15 +139,14 @@ namespace DotNetty.Handlers.Tests
             var lengthVariations =
                 new[]
                 {
-                    new[] { 9168, 1671, -1, 4643, 16578, -1, -1, 7238, 4729, 7668, 10674, 9364, 268, 11210, 183, 8898, 9651, 15601, 2774, 2040, -1, 5945, 4409, 11809, 2958, 5664, 9971, 14637, 14461, 4923 }
-                    // new[] { 1 },
-                    // new[] { 2, 8000, 300 },
-                    // new[] { 100, 0, 1000 },
-                    // new[] { 4 * 1024 - 10, 1, -1, 0, -1, 1 },
-                    // new[] { 0, 24000, 0, -1, 1000 },
-                    // new[] { 0, 4000, 0 },
-                    // new[] { 16 * 1024 - 100 },
-                    // Enumerable.Repeat(0, 30).Select(_ => random.Next(0, 10) < 2 ? -1 : random.Next(0, 17000)).ToArray()
+                    new[] { 1 },
+                    new[] { 2, 8000, 300 },
+                    new[] { 100, 0, 1000 },
+                    new[] { 4 * 1024 - 10, 1, -1, 0, -1, 1 },
+                    new[] { 0, 24000, 0, -1, 1000 },
+                    new[] { 0, 4000, 0 },
+                    new[] { 16 * 1024 - 100 },
+                    Enumerable.Repeat(0, 30).Select(_ => random.Next(0, 10) < 2 ? -1 : random.Next(0, 17000)).ToArray()
                 };
             var boolToggle = new[] { false, true };
             var protocols = new[]
