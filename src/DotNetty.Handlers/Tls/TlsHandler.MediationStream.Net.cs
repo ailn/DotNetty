@@ -105,20 +105,40 @@ namespace DotNetty.Handlers.Tls
                     if (this.SourceIsReadable)
                     {
                         Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
-
+                
                         // we have the bytes available upfront - write out synchronously
                         int read = this.ReadFromInput(buffer);
                         return new ValueTask<int>(read);
                     }
-
+                
                     Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
-
+                
                     Contract.Assert(this.sslOwnedMemory.IsEmpty);
                     // take note of buffer - we will pass bytes there once available
                     this.sslOwnedMemory = buffer;
                     this.readCompletionSource = new TaskCompletionSource<int>();
                     return new ValueTask<int>(this.readCompletionSource.Task);
                 }
+            }
+
+            ValueTask<int> ReadInternalAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+            {
+                if (this.SourceIsReadable)
+                {
+                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
+
+                    // we have the bytes available upfront - write out synchronously
+                    int read = this.ReadFromInput(buffer);
+                    return new ValueTask<int>(read);
+                }
+
+                Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
+
+                Contract.Assert(this.sslOwnedMemory.IsEmpty);
+                // take note of buffer - we will pass bytes there once available
+                this.sslOwnedMemory = buffer;
+                this.readCompletionSource = new TaskCompletionSource<int>();
+                return new ValueTask<int>(this.readCompletionSource.Task);
             }
 
             public override void Write(byte[] buffer, int offset, int count)
