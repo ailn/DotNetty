@@ -251,7 +251,11 @@ namespace DotNetty.Handlers.Tests
                 new TlsHandler(new ServerTlsSettings(tlsCertificate, false, false, serverProtocol));
             //var ch = new EmbeddedChannel(new LoggingHandler("BEFORE"), tlsHandler, new LoggingHandler("AFTER"));
 
+#if NET5_0_OR_GREATER
             IEmbeddedChannel ch = new SingleThreadedEmbeddedChannel(executor, tlsHandler);
+#else
+            IEmbeddedChannel ch = new EmbeddedChannel(tlsHandler);
+#endif
 
             IByteBuffer readResultBuffer = Unpooled.Buffer(4 * 1024);
             Func<ArraySegment<byte>, Task<int>> readDataFunc = async output =>
