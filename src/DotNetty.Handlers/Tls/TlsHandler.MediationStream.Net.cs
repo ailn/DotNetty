@@ -45,58 +45,84 @@ namespace DotNetty.Handlers.Tls
 
             public override void ExpandSource(int count)
             {
-                lock (this)
+                Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
+
+                this.source.Expand(count);
+
+                Memory<byte> sslMemory = this.sslOwnedMemory;
+                if (sslMemory.IsEmpty)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
-
-                    this.source.Expand(count);
-
-                    Memory<byte> sslMemory = this.sslOwnedMemory;
-                    if (sslMemory.IsEmpty)
-                    {
-                        // there is no pending read operation - keep for future
-                        Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} there is no pending read operation - keep for future");
-                        return;
-                    }
-
-                    this.sslOwnedMemory = default;
-
-                    this.readByteCount = this.ReadFromInput(sslMemory);
-                    // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
-                    new Task(
-                            ms =>
-                            {
-                                var self = (MediationStreamNet)ms;
-                                TaskCompletionSource<int> p = self.readCompletionSource;
-                                self.readCompletionSource = null;
-                                p.TrySetResult(self.readByteCount);
-                            },
-                            this)
-                        .RunSynchronously(TaskScheduler.Default);
+                    // there is no pending read operation - keep for future
+                    Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} there is no pending read operation - keep for future");
+                    return;
                 }
+
+                this.sslOwnedMemory = default;
+
+                this.readByteCount = this.ReadFromInput(sslMemory);
+                // hack: this tricks SslStream's continuation to run synchronously instead of dispatching to TP. Remove once Begin/EndRead are available. 
+                new Task(
+                        ms =>
+                        {
+                            var self = (MediationStreamNet)ms;
+                            TaskCompletionSource<int> p = self.readCompletionSource;
+                            self.readCompletionSource = null;
+                            p.TrySetResult(self.readByteCount);
+                        },
+                        this)
+                    .RunSynchronously(TaskScheduler.Default);
             }
 
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
-                lock (this)
+                return this.owner.capturedContext.Executor.InEventLoop 
+                    ? this.InLoopReadAsync(buffer, cancellationToken) 
+                    : new ValueTask<int>(this.OutOfLoopReadAsync(buffer, cancellationToken));
+            }
+
+            ValueTask<int> InLoopReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+            {
+                if (this.SourceIsReadable)
                 {
-                    if (this.SourceIsReadable)
-                    {
-                        Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
+                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
 
-                        // we have the bytes available upfront - write out synchronously
-                        int read = this.ReadFromInput(buffer);
-                        return new ValueTask<int>(read);
-                    }
-
-                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
-
-                    Contract.Assert(this.sslOwnedMemory.IsEmpty);
-                    // take note of buffer - we will pass bytes there once available
-                    this.sslOwnedMemory = buffer;
-                    this.readCompletionSource = new TaskCompletionSource<int>();
-                    return new ValueTask<int>(this.readCompletionSource.Task);
+                    // we have the bytes available upfront - write out synchronously
+                    int read = this.ReadFromInput(buffer);
+                    return new ValueTask<int>(read);
                 }
+
+                Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
+
+                Contract.Assert(this.sslOwnedMemory.IsEmpty);
+                // take note of buffer - we will pass bytes there once available
+                this.sslOwnedMemory = buffer;
+                this.readCompletionSource = new TaskCompletionSource<int>();
+                return new ValueTask<int>(this.readCompletionSource.Task);
+            }
+            
+            Task<int> OutOfLoopReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+            {
+                return this.owner.capturedContext.Executor.SubmitAsync(
+                    () =>
+                    {
+                        if (this.SourceIsReadable)
+                        {
+                            Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
+
+                            // we have the bytes available upfront - write out synchronously
+                            int read = this.ReadFromInput(buffer);
+                            return Task.FromResult(read);
+                        }
+
+                        Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
+
+                        Contract.Assert(this.sslOwnedMemory.IsEmpty);
+                        // take note of buffer - we will pass bytes there once available
+                        this.sslOwnedMemory = buffer;
+                        this.readCompletionSource = new TaskCompletionSource<int>();
+                        return this.readCompletionSource.Task;
+                    },
+                    cancellationToken).Unwrap();
             }
 
             public override void Write(byte[] buffer, int offset, int count)
