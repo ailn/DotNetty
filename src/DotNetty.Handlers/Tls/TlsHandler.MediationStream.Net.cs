@@ -84,14 +84,14 @@ namespace DotNetty.Handlers.Tls
             {
                 if (this.SourceIsReadable)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
+                    Trace(nameof(MediationStream), $"{nameof(this.InLoopReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
 
                     // we have the bytes available upfront - write out synchronously
                     int read = this.ReadFromInput(buffer);
                     return new ValueTask<int>(read);
                 }
 
-                Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
+                Trace(nameof(MediationStream), $"{nameof(this.InLoopReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
 
                 Contract.Assert(this.sslOwnedMemory.IsEmpty);
                 // take note of buffer - we will pass bytes there once available
@@ -107,14 +107,14 @@ namespace DotNetty.Handlers.Tls
                     {
                         if (this.SourceIsReadable)
                         {
-                            Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
+                            Trace(nameof(MediationStream), $"{nameof(this.OutOfLoopReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
 
                             // we have the bytes available upfront - write out synchronously
                             int read = this.ReadFromInput(buffer);
                             return Task.FromResult(read);
                         }
 
-                        Trace(nameof(MediationStream), $"{nameof(this.ReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
+                        Trace(nameof(MediationStream), $"{nameof(this.OutOfLoopReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
 
                         Contract.Assert(this.sslOwnedMemory.IsEmpty);
                         // take note of buffer - we will pass bytes there once available
@@ -154,7 +154,7 @@ namespace DotNetty.Handlers.Tls
 
             int ReadFromInput(Memory<byte> destination)
             {
-                int read = this.source.Read(destination);
+                int read = this.source.ReadOne(destination);//this.source.Read(destination);
                 Trace(nameof(MediationStream), $"{nameof(this.ReadFromInput)} buffer.Length: {destination.Length}, read: {read}");
                 return read;
             }
@@ -283,6 +283,25 @@ namespace DotNetty.Handlers.Tls
                     }
 
                     return totalRead;
+                }
+
+                // Read one from one source at a time
+                public int ReadOne(Memory<byte> destination)
+                {
+                    LinkedListNode<Source> node = this.sources.First;
+                    while (node != null)
+                    {
+                        Source source = node.Value;
+                        if (!source.IsReadable)
+                        {
+                            node = node.Next;
+                            continue;
+                        }
+                        
+                        return source.Read(destination.Slice(0, destination.Length));
+                    }
+
+                    return 0;
                 }
 
                 // Remove all not readable sources. Start from first as it's the oldest
