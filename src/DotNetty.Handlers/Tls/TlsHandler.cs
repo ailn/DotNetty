@@ -4,22 +4,15 @@
 namespace DotNetty.Handlers.Tls
 {
     using System;
-    using System.Collections.Concurrent;
     using System.Collections.Generic;
-    using System.Diagnostics;
     using System.Diagnostics.Contracts;
     using System.IO;
     using System.Net.Security;
-    using System.Runtime.CompilerServices;
-    using System.Runtime.ExceptionServices;
     using System.Security.Cryptography.X509Certificates;
-    using System.Security.Permissions;
-    using System.Threading;
     using System.Threading.Tasks;
     using DotNetty.Buffers;
     using DotNetty.Codecs;
     using DotNetty.Common;
-    using DotNetty.Common.Concurrency;
     using DotNetty.Common.Utilities;
     using DotNetty.Transport.Channels;
     using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
@@ -32,30 +25,21 @@ namespace DotNetty.Handlers.Tls
 
         static readonly Exception ChannelClosedException = new IOException("Channel is closed");
         static readonly Action<Task, object> HandshakeCompletionCallback = new Action<Task, object>(HandleHandshakeCompleted);
+        static readonly List<(int, byte)> EmptyPacketsList = new List<(int, byte)>(0);
 
         readonly SslStream sslStream;
         readonly MediationStreamBase mediationStream;
         readonly TaskCompletionSource closeFuture;
 
         TlsHandlerState state;
-        int packetLength;
-        byte contentType;
-        List<(int packetLength, byte type)> pendingDataPackets;
+        (int packetLength, byte packetContentType) packetInfo;
+        List<(int packetLength, byte packetContentType)> pendingDataPackets;
         volatile IChannelHandlerContext capturedContext;
         BatchingPendingWriteQueue pendingUnencryptedWrites;
         Task lastContextWriteTask;
         bool firedChannelRead;
         IByteBuffer pendingSslStreamReadBuffer;
         Task<int> pendingSslStreamReadFuture;
-
-        public static readonly ConcurrentQueue<string> Events = new ConcurrentQueue<string>();
-        public static void Trace(string source, string message)
-        {
-            // Logger.Debug($"[{source}] [{Thread.CurrentThread.ManagedThreadId}] {message}");
-            // Events.Enqueue($"[{DateTime.Now:O}] [{Thread.CurrentThread.ManagedThreadId}] [{source}] {message}");
-            Events.Enqueue($"[{Thread.CurrentThread.ManagedThreadId}] [{source}] {message}");
-            // Events.Enqueue($"[{source}] {message}");
-        }
 
         public TlsHandler(TlsSettings settings)
             : this(stream => new SslStream(stream, true), settings)
@@ -88,8 +72,6 @@ namespace DotNetty.Handlers.Tls
 
         public override void ChannelActive(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.ChannelActive)}, isServer: {this.IsServer}");
-            
             base.ChannelActive(context);
 
             if (!this.IsServer)
@@ -100,8 +82,6 @@ namespace DotNetty.Handlers.Tls
 
         public override void ChannelInactive(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.ChannelInactive)}");
-            
             // Make sure to release SslStream,
             // and notify the handshake future if the connection has been closed during handshake.
             this.HandleFailure(ChannelClosedException);
@@ -111,8 +91,6 @@ namespace DotNetty.Handlers.Tls
 
         public override void ExceptionCaught(IChannelHandlerContext context, Exception exception)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.ExceptionCaught)}. Exception: {exception}");
-            
             if (this.IgnoreException(exception))
             {
                 // Close the connection explicitly just in case the transport
@@ -140,8 +118,6 @@ namespace DotNetty.Handlers.Tls
         static void HandleHandshakeCompleted(Task task, object state)
         {
             var self = (TlsHandler)state;
-            Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
-
             if (self.capturedContext.Executor.InEventLoop)
             {
                 HandleHandshakeCompletedInternal(task, self);
@@ -154,7 +130,6 @@ namespace DotNetty.Handlers.Tls
 
         static void HandleHandshakeCompletedInternal(Task task, TlsHandler self)
         {
-            Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompletedInternal)}, state: {self.state}, task.Status: {task.Status}");
             switch (task.Status)
             {
                 case TaskStatus.RanToCompletion:
@@ -166,17 +141,20 @@ namespace DotNetty.Handlers.Tls
 
                     self.capturedContext.FireUserEventTriggered(TlsHandshakeCompletionEvent.Success);
                     
+                    // Due to possible async execution of HandleHandshakeCompleted continuation, we need to
+                    // Unwrap any pending app data packets in case when read completed and no messages in channel. 
                     ThreadLocalObjectList output = ThreadLocalObjectList.NewInstance();
                     try
                     {
-                        self.Unwrap(self.capturedContext, Unpooled.Empty, 0, 0, new List<(int packetLength, byte type)>(0), output);
-                    }
-                    finally
-                    {
+                        self.Unwrap(self.capturedContext, Unpooled.Empty, 0, 0, EmptyPacketsList, output);
+                        
                         for (int i = 0; i < output.Count; i++)
                         {
                             self.capturedContext.FireChannelRead(output[i]);
                         }
+                    }
+                    finally
+                    {
                         output.Return();
                     }
                     
@@ -209,8 +187,6 @@ namespace DotNetty.Handlers.Tls
 
         public override void HandlerAdded(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.HandlerAdded)}");
-            
             base.HandlerAdded(context);
             this.capturedContext = context;
             this.pendingUnencryptedWrites = new BatchingPendingWriteQueue(context, UnencryptedWriteBatchSize);
@@ -223,8 +199,6 @@ namespace DotNetty.Handlers.Tls
 
         protected override void HandlerRemovedInternal(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.HandlerRemovedInternal)}");
-            
             if (!this.pendingUnencryptedWrites.IsEmpty)
             {
                 // Check if queue is not empty first because create a new ChannelException is expensive
@@ -232,7 +206,6 @@ namespace DotNetty.Handlers.Tls
             }
         }
 
-        int decode;
         protected override void Decode(IChannelHandlerContext context, IByteBuffer input, List<object> output)
         {
             int startOffset = input.ReaderIndex;
@@ -240,29 +213,27 @@ namespace DotNetty.Handlers.Tls
             int offset = startOffset;
             int totalLength = 0;
 
-            Trace(nameof(TlsHandler), $"[{Interlocked.Increment(ref this.decode)}] {nameof(this.Decode)} input.ReaderIndex: {input.ReaderIndex}, input.WriterIndex: {input.WriterIndex}, output.Count: {output.Count}");
-
-            List<(int, byte)> packetLengths;
+            List<(int, byte)> packetInfos;
             // if we calculated the length of the current SSL record before, use that information.
-            if (this.packetLength > 0)
+            if (this.packetInfo.packetLength > 0)
             {
-                if (endOffset - startOffset < this.packetLength)
+                if (endOffset - startOffset < this.packetInfo.packetLength)
                 {
                     // input does not contain a single complete SSL record
                     return;
                 }
                 else
                 {
-                    packetLengths = new List<(int, byte)>(4);
-                    packetLengths.Add((this.packetLength, this.contentType));
-                    offset += this.packetLength;
-                    totalLength = this.packetLength;
-                    this.packetLength = 0;
+                    packetInfos = new List<(int, byte)>(4);
+                    packetInfos.Add(this.packetInfo);
+                    offset += this.packetInfo.packetLength;
+                    totalLength = this.packetInfo.packetLength;
+                    this.packetInfo = default;
                 }
             }
             else
             {
-                packetLengths = new List<(int, byte)>(4);
+                packetInfos = new List<(int, byte)>(4);
             }
 
             bool nonSslRecord = false;
@@ -275,7 +246,7 @@ namespace DotNetty.Handlers.Tls
                     break;
                 }
 
-                int encryptedPacketLength = TlsUtils.GetEncryptedPacketLength(input, offset, out byte type);
+                int encryptedPacketLength = TlsUtils.GetEncryptedPacketLength(input, offset, out byte contentType);
                 if (encryptedPacketLength == -1)
                 {
                     nonSslRecord = true;
@@ -287,8 +258,7 @@ namespace DotNetty.Handlers.Tls
                 if (encryptedPacketLength > readableBytes)
                 {
                     // wait until the whole packet can be read
-                    this.packetLength = encryptedPacketLength;
-                    this.contentType = type;
+                    this.packetInfo = (encryptedPacketLength, contentType);
                     break;
                 }
 
@@ -304,7 +274,7 @@ namespace DotNetty.Handlers.Tls
 
                 // We have a whole packet.
                 // Increment the offset to handle the next packet.
-                packetLengths.Add((encryptedPacketLength, type));
+                packetInfos.Add((encryptedPacketLength, contentType));
                 offset += encryptedPacketLength;
                 totalLength = newTotalLength;
             }
@@ -323,7 +293,7 @@ namespace DotNetty.Handlers.Tls
                 // See https://github.com/netty/netty/issues/1534
 
                 input.SkipBytes(totalLength);
-                this.Unwrap(context, input, startOffset, totalLength, packetLengths, output);
+                this.Unwrap(context, input, startOffset, totalLength, packetInfos, output);
 
                 if (!this.firedChannelRead)
                 {
@@ -346,8 +316,6 @@ namespace DotNetty.Handlers.Tls
 
         public override void ChannelReadComplete(IChannelHandlerContext ctx)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.ChannelReadComplete)}");
-            
             // Discard bytes of the cumulation buffer if needed.
             this.DiscardSomeReadBytes();
 
@@ -370,11 +338,9 @@ namespace DotNetty.Handlers.Tls
         
 
         /// <summary>Unwraps inbound SSL records.</summary>
-        void Unwrap(IChannelHandlerContext ctx, IByteBuffer packet, int offset, int length, List<(int packetLength, byte type)> packetLengths, List<object> output)
+        void Unwrap(IChannelHandlerContext ctx, IByteBuffer packet, int offset, int length, List<(int packetLength, byte packetContentType)> packetInfos, List<object> output)
         {
-            Contract.Requires(packetLengths.Count > 0 || this.pendingDataPackets != null);
-
-            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} offset: {offset}, length: {length}");
+            Contract.Requires(packetInfos.Count > 0 || this.pendingDataPackets != null);
 
             //bool notifyClosure = false; // todo: netty/issues/137
             bool pending = false;
@@ -385,7 +351,7 @@ namespace DotNetty.Handlers.Tls
             {
                 int packetIndex = 0;
 
-                if (packetLengths.Count > 0)
+                if (packetInfos.Count > 0)
                 {
                     ArraySegment<byte> inputIoBuffer = packet.GetIoBuffer(offset, length);
                     this.mediationStream.SetSource(inputIoBuffer.Array, inputIoBuffer.Offset);
@@ -394,18 +360,16 @@ namespace DotNetty.Handlers.Tls
                     {
                         // Due to SslStream's implementation, it's possible that we expand after handshake completed. Hence, we
                         // need to make sure we call ReadFromSslStreamAsync for these packets later
-                        (int packetLength, byte type) = packetLengths[packetIndex];
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} contentType: {TlsUtils.FormatContentType(type)}");
+                        (int packetLength, byte type) = packetInfos[packetIndex];
                         this.mediationStream.ExpandSource(packetLength);
 
                         if (type == TlsUtils.SSL_CONTENT_TYPE_APPLICATION_DATA)
                         {
-                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} App data but not authenticated. packetIndex: {packetIndex}, count: {packetLengths.Count} ");
-                            this.pendingDataPackets = this.pendingDataPackets ?? new List<(int packetLength, byte type)>(8);
+                            this.pendingDataPackets = this.pendingDataPackets ?? new List<(int packetLength, byte packetContentType)>(8);
                             this.pendingDataPackets.Add((packetLength, type));
                         }
 
-                        if (++packetIndex == packetLengths.Count)
+                        if (++packetIndex == packetInfos.Count)
                         {
                             return;
                         }
@@ -437,24 +401,23 @@ namespace DotNetty.Handlers.Tls
                 int skipExpandPacketCount = 0;
                 if (this.pendingDataPackets != null)
                 {
-                    Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} PendingDataPackets: {this.pendingDataPackets.Count}");
                     // We already expanded the source for all pendingDataPackets, so skip expand further below
                     skipExpandPacketCount = this.pendingDataPackets.Count;
 
                     // add packetLengths to pending except already processed
-                    for (int i = packetIndex; i < packetLengths.Count; i++)
+                    for (int i = packetIndex; i < packetInfos.Count; i++)
                     {
-                        this.pendingDataPackets.Add(packetLengths[i]);
+                        this.pendingDataPackets.Add(packetInfos[i]);
                     }
 
-                    packetLengths = this.pendingDataPackets;
+                    packetInfos = this.pendingDataPackets;
                     this.pendingDataPackets = null;
                     packetIndex = 0;
                 }
 
-                for (; packetIndex < packetLengths.Count; packetIndex++)
+                for (; packetIndex < packetInfos.Count; packetIndex++)
                 {
-                    int currentPacketLength = packetLengths[packetIndex].packetLength;
+                    int currentPacketLength = packetInfos[packetIndex].packetLength;
 
                     if (--skipExpandPacketCount < 0)
                     {
@@ -469,13 +432,10 @@ namespace DotNetty.Handlers.Tls
                         if (!currentReadFuture.IsCompleted)
                         {
                             // we did feed the whole current packet to SslStream yet it did not produce any result -> move to the next packet in input
-                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} ReadFromSslStreamAsync currentReadFuture.IsCompleted: false");
                             continue;
                         }
 
                         int read = currentReadFuture.Result;
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} ReadFromSslStreamAsync currentReadFuture.Result: {currentReadFuture.Result}");
-
                         if (read == 0)
                         {
                             //Stream closed
@@ -531,12 +491,10 @@ namespace DotNetty.Handlers.Tls
                     {
                         if (!currentReadFuture.IsCompleted)
                         {
-                            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} ReadFromSslStreamAsync currentReadFuture.IsCompleted: false");
                             break;
                         }
 
                         int read = currentReadFuture.Result;
-                        Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.Unwrap)} ReadFromSslStreamAsync currentReadFuture.Result: {currentReadFuture.Result}");
                         AddBufferToOutput(outputBuffer, read, output);
                     }
 
@@ -578,15 +536,12 @@ namespace DotNetty.Handlers.Tls
 
         Task<int> ReadFromSslStreamAsync(IByteBuffer outputBuffer, int outputBufferLength)
         {
-            Trace(nameof(TlsHandler), $"[{this.decode}] {nameof(this.ReadFromSslStreamAsync)}({outputBufferLength})");
             ArraySegment<byte> outlet = outputBuffer.GetIoBuffer(outputBuffer.WriterIndex, outputBufferLength);
             return this.sslStream.ReadAsync(outlet.Array, outlet.Offset, outlet.Count);
         }
 
         public override void Read(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.Read)}");
-
             TlsHandlerState oldState = this.state;
             if (!oldState.HasAny(TlsHandlerState.AuthenticationCompleted))
             {
@@ -598,24 +553,18 @@ namespace DotNetty.Handlers.Tls
 
         bool EnsureAuthenticated()
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.EnsureAuthenticated)} state: {this.state}");
-            
             TlsHandlerState oldState = this.state;
             if (!oldState.HasAny(TlsHandlerState.AuthenticationStarted))
             {
                 this.state = oldState | TlsHandlerState.Authenticating;
                 if (this.IsServer)
                 {
-                    Trace(nameof(TlsHandler), $"AuthenticateAsServerAsync state: {this.state}");
-                    
                     var serverSettings = (ServerTlsSettings)this.settings;
                     this.sslStream.AuthenticateAsServerAsync(serverSettings.Certificate, serverSettings.NegotiateClientCertificate, serverSettings.EnabledProtocols, serverSettings.CheckCertificateRevocation)
                         .ContinueWith(HandshakeCompletionCallback, this, TaskContinuationOptions.ExecuteSynchronously);
                 }
                 else
                 {
-                    Trace(nameof(TlsHandler), $"AuthenticateAsClientAsync state: {this.state}");
-                    
                     var clientSettings = (ClientTlsSettings)this.settings;
                     this.sslStream.AuthenticateAsClientAsync(clientSettings.TargetHost, clientSettings.X509CertificateCollection, clientSettings.EnabledProtocols, clientSettings.CheckCertificateRevocation)
                         .ContinueWith(HandshakeCompletionCallback, this, TaskContinuationOptions.ExecuteSynchronously);
@@ -628,8 +577,6 @@ namespace DotNetty.Handlers.Tls
 
         public override Task WriteAsync(IChannelHandlerContext context, object message)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.WriteAsync)} message: {message}");
-
             if (!(message is IByteBuffer))
             {
                 return TaskEx.FromException(new UnsupportedMessageTypeException(message, typeof(IByteBuffer)));
@@ -640,8 +587,6 @@ namespace DotNetty.Handlers.Tls
 
         public override void Flush(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.Flush)}");
-
             if (this.pendingUnencryptedWrites.IsEmpty)
             {
                 this.pendingUnencryptedWrites.Add(Unpooled.Empty);
@@ -664,12 +609,9 @@ namespace DotNetty.Handlers.Tls
             }
         }
 
-        int wrap;
         void Wrap(IChannelHandlerContext context)
         {
             Contract.Assert(context == this.capturedContext);
-            
-            Trace(nameof(TlsHandler), $"[{Interlocked.Increment(ref this.wrap)}] {nameof(this.Wrap)}");
 
             IByteBuffer buf = null;
             try
@@ -722,8 +664,6 @@ namespace DotNetty.Handlers.Tls
 
         void FinishWrap(byte[] buffer, int offset, int count)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.FinishWrap)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-            
             IByteBuffer output;
             if (count == 0)
             {
@@ -740,8 +680,6 @@ namespace DotNetty.Handlers.Tls
 
         Task FinishWrapNonAppDataAsync(byte[] buffer, int offset, int count)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.FinishWrapNonAppDataAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
-            
             var future = this.capturedContext.WriteAndFlushAsync(Unpooled.WrappedBuffer(buffer, offset, count));
             this.ReadIfNeeded(this.capturedContext);
             return future;
@@ -749,8 +687,6 @@ namespace DotNetty.Handlers.Tls
 
         public override Task CloseAsync(IChannelHandlerContext context)
         {
-            Trace(nameof(TlsHandler), $"{nameof(this.CloseAsync)}");
-            
             this.closeFuture.TryComplete();
             this.sslStream.Dispose();
             return base.CloseAsync(context);
@@ -760,9 +696,6 @@ namespace DotNetty.Handlers.Tls
         {
             // Release all resources such as internal buffers that SSLEngine
             // is managing.
-            
-            Trace(nameof(TlsHandler), $"{nameof(HandleFailure)}, cause: {cause}");
-
             this.mediationStream.Dispose();
             try
             {
