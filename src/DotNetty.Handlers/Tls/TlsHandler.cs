@@ -136,11 +136,12 @@ namespace DotNetty.Handlers.Tls
             return false;
         }
 
-        static void HandleHandshakeCompleted(Task task, object state)
+        static async void HandleHandshakeCompleted(Task task, object state)
         {
             var self = (TlsHandler)state;
             Trace(nameof(TlsHandler), $"{nameof(HandleHandshakeCompleted)}, state: {self.state}, task.Status: {task.Status}");
 
+            await Task.Delay(30);
             if (self.capturedContext.Executor.InEventLoop)
             {
                 HandleHandshakeCompletedInternal(task, self);

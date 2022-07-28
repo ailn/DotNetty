@@ -199,6 +199,8 @@ namespace DotNetty.Handlers.Tls
 
                 public void Expand(int count)
                 {
+                    Contract.Assert(!this.retained); // retained source is not expected to be Expanded
+                    
                     this.length += count;
 
                     Contract.Assert(this.length <= this.input.Length);
@@ -223,11 +225,17 @@ namespace DotNetty.Handlers.Tls
                     }
                     
                     // todo: is there a way to not discard those bytes till they are read??? If not, then use context.Allocator???
+                    
+                    // Copy readable bytes to a new buffer
                     byte[] copy = new byte[readableBytes];
                     Buffer.BlockCopy(this.input, this.startOffset + this.offset, copy, 0, readableBytes);
                     this.input = copy;
+                    
+                    // Set both offsets to 0 and length to readableBytes (so that this.ReadableBytes stays the same)
                     this.startOffset = 0;
-
+                    this.offset = 0;
+                    this.length = readableBytes;
+                    
                     this.retained = true;
                 }
             }
