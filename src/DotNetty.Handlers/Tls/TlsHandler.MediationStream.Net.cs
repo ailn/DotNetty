@@ -25,32 +25,18 @@ namespace DotNetty.Handlers.Tls
             }
 
             public override bool SourceIsReadable => this.source.IsReadable;
-
             public override int SourceReadableBytes => this.source.GetTotalReadableBytes();
 
-            public override void SetSource(byte[] source, int offset)
-            {
-                Trace(nameof(MediationStream), $"{nameof(this.SetSource)} source.Length: {source.Length}, offset: {offset}");
-                this.source.AddSource(source, offset);
-            }
-
-            public override void ResetSource()
-            {
-                Trace(nameof(MediationStream), $"{nameof(this.ResetSource)}");
-                this.source.CleanUp();
-            }
-
+            public override void SetSource(byte[] source, int offset) => this.source.AddSource(source, offset);
+            public override void ResetSource() => this.source.ResetSources();
+            
             public override void ExpandSource(int count)
             {
-                Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} count: {count}");
-
                 this.source.Expand(count);
 
                 Memory<byte> sslMemory = this.sslOwnedMemory;
                 if (sslMemory.IsEmpty)
                 {
-                    // there is no pending read operation - keep for future
-                    Trace(nameof(MediationStream), $"{nameof(this.ExpandSource)} there is no pending read operation - keep for future");
                     return;
                 }
 
@@ -71,24 +57,18 @@ namespace DotNetty.Handlers.Tls
             }
 
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-            {
-                return this.owner.capturedContext.Executor.InEventLoop 
-                    ? this.InLoopReadAsync(buffer, cancellationToken) 
+                => this.owner.capturedContext.Executor.InEventLoop
+                    ? this.InLoopReadAsync(buffer, cancellationToken)
                     : new ValueTask<int>(this.OutOfLoopReadAsync(buffer, cancellationToken));
-            }
 
             ValueTask<int> InLoopReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
             {
                 if (this.SourceIsReadable)
                 {
-                    Trace(nameof(MediationStream), $"{nameof(this.InLoopReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
-
                     // we have the bytes available upfront - write out synchronously
                     int read = this.ReadFromInput(buffer);
                     return new ValueTask<int>(read);
                 }
-
-                Trace(nameof(MediationStream), $"{nameof(this.InLoopReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
 
                 Contract.Assert(this.sslOwnedMemory.IsEmpty);
                 // take note of buffer - we will pass bytes there once available
@@ -104,14 +84,10 @@ namespace DotNetty.Handlers.Tls
                     {
                         if (this.SourceIsReadable)
                         {
-                            Trace(nameof(MediationStream), $"{nameof(this.OutOfLoopReadAsync)} buffer.Length: {buffer.Length}, SourceIsReadable: {this.SourceIsReadable}. ReadFromInput");
-
                             // we have the bytes available upfront - write out synchronously
                             int read = this.ReadFromInput(buffer);
                             return Task.FromResult(read);
                         }
-
-                        Trace(nameof(MediationStream), $"{nameof(this.OutOfLoopReadAsync)} buffer.Length: {buffer.Length},  SourceIsReadable: {this.SourceIsReadable}. readCompletionSource");
 
                         Contract.Assert(this.sslOwnedMemory.IsEmpty);
                         // take note of buffer - we will pass bytes there once available
@@ -124,7 +100,6 @@ namespace DotNetty.Handlers.Tls
 
             public override void Write(byte[] buffer, int offset, int count)
             {
-                Trace(nameof(MediationStream), $"{nameof(this.Write)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
                 if (this.owner.capturedContext.Executor.InEventLoop)
                 {
                     this.owner.FinishWrap(buffer, offset, count);
@@ -137,7 +112,6 @@ namespace DotNetty.Handlers.Tls
 
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
-                Trace(nameof(MediationStream), $"{nameof(this.WriteAsync)} buffer.Length: {buffer.Length}, offset: {offset}, count: {count}");
                 if (this.owner.capturedContext.Executor.InEventLoop)
                 {
                     return this.owner.FinishWrapNonAppDataAsync(buffer, offset, count);
@@ -147,13 +121,6 @@ namespace DotNetty.Handlers.Tls
                     () => this.owner.FinishWrapNonAppDataAsync(buffer, offset, count),
                     cancellationToken
                 ).Unwrap();
-            }
-
-            int ReadFromInput(Memory<byte> destination)
-            {
-                int read = this.source.Read(destination);
-                Trace(nameof(MediationStream), $"{nameof(this.ReadFromInput)} buffer.Length: {destination.Length}, read: {read}");
-                return read;
             }
 
             public override void Flush()
@@ -174,6 +141,8 @@ namespace DotNetty.Handlers.Tls
                     }
                 }
             }
+            
+            int ReadFromInput(Memory<byte> destination) => this.source.Read(destination);
 
             #region Source
 
@@ -199,23 +168,20 @@ namespace DotNetty.Handlers.Tls
 
                 public void Expand(int count)
                 {
-                    Contract.Assert(!this.retained); // retained source is not expected to be Expanded
-                    
+                    Contract.Assert(!this.retained); // Retained source is not expected to be Expanded
                     this.length += count;
-
                     Contract.Assert(this.length <= this.input.Length);
                 }
 
                 public int Read(Memory<byte> destination)
                 {
-                    int readableBytes = this.ReadableBytes;
-                    int len = Math.Min(readableBytes, destination.Length);
+                    int len = Math.Min(this.ReadableBytes, destination.Length);
                     new ReadOnlySpan<byte>(this.input, this.startOffset + this.offset, len).CopyTo(destination.Span);
                     this.offset += len;
                     return len;
                 }
 
-                // This is to not discard input bytes by ref counting mechanism
+                // This is to avoid input bytes to be discarded by ref counting mechanism
                 public void Retain()
                 {
                     int readableBytes = this.ReadableBytes;
@@ -226,7 +192,7 @@ namespace DotNetty.Handlers.Tls
                     
                     // todo: is there a way to not discard those bytes till they are read??? If not, then use context.Allocator???
                     
-                    // Copy readable bytes to a new buffer
+                    // Copy only readable bytes to a new buffer
                     byte[] copy = new byte[readableBytes];
                     Buffer.BlockCopy(this.input, this.startOffset + this.offset, copy, 0, readableBytes);
                     this.input = copy;
@@ -309,27 +275,8 @@ namespace DotNetty.Handlers.Tls
                     return totalRead;
                 }
 
-                // Read one from one source at a time
-                public int ReadOne(Memory<byte> destination)
-                {
-                    LinkedListNode<Source> node = this.sources.First;
-                    while (node != null)
-                    {
-                        Source source = node.Value;
-                        if (!source.IsReadable)
-                        {
-                            node = node.Next;
-                            continue;
-                        }
-                        
-                        return source.Read(destination.Slice(0, destination.Length));
-                    }
-
-                    return 0;
-                }
-
                 // Remove all not readable sources and retain readable. Start from first as it's the oldest
-                public void CleanUp()
+                public void ResetSources()
                 {
                     LinkedListNode<Source> node = this.sources.First;
                     while (node != null)

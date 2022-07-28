@@ -73,10 +73,6 @@ namespace DotNetty.Handlers.Tests
         [MemberData(nameof(GetTlsReadTestData))]
         public async Task TlsRead(int[] frameLengths, bool isClient, IWriteStrategy writeStrategy, SslProtocols serverProtocol, SslProtocols clientProtocol)
         {
-            while (TlsHandler.Events.TryDequeue(out _))
-            {
-            }
-
             this.Output.WriteLine($"frameLengths: {string.Join(", ", frameLengths)}");
             this.Output.WriteLine($"isClient: {isClient}");
             this.Output.WriteLine($"writeStrategy: {writeStrategy}");
@@ -114,21 +110,8 @@ namespace DotNetty.Handlers.Tests
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
             }
-            catch (Exception)
-            {
-                while (TlsHandler.Events.TryDequeue(out string msg))
-                {
-                    this.Output.WriteLine(msg);
-                }
-
-                throw;
-            }
             finally
             {
-                // while (TlsHandler.Events.TryDequeue(out string msg))
-                // {
-                //     this.Output.WriteLine(msg);
-                // }
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
@@ -169,11 +152,6 @@ namespace DotNetty.Handlers.Tests
         [MemberData(nameof(GetTlsWriteTestData))]
         public async Task TlsWrite(int[] frameLengths, bool isClient, SslProtocols serverProtocol, SslProtocols clientProtocol)
         {
-            while (TlsHandler.Events.TryDequeue(out _))
-            {
-            }
-
-            
             this.Output.WriteLine($"frameLengths: {string.Join(", ", frameLengths)}");
             this.Output.WriteLine($"isClient: {isClient}");
             this.Output.WriteLine($"serverProtocol: {serverProtocol}");
@@ -223,21 +201,8 @@ namespace DotNetty.Handlers.Tests
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
             }
-            catch (Exception)
-            {
-                // while (TlsHandler.Events.TryDequeue(out string msg))
-                // {
-                //     this.Output.WriteLine(msg);
-                // }
-
-                throw;
-            }
             finally
             {
-                while (TlsHandler.Events.TryDequeue(out string msg))
-                {
-                    this.Output.WriteLine(msg);
-                }
                 await executor.ShutdownGracefullyAsync(TimeSpan.Zero, TimeSpan.Zero);
             }
         }
@@ -260,10 +225,8 @@ namespace DotNetty.Handlers.Tests
             IByteBuffer readResultBuffer = Unpooled.Buffer(4 * 1024);
             Func<ArraySegment<byte>, Task<int>> readDataFunc = async output =>
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "readDataFunc");
                 if (writeTasks.Count > 0)
                 {
-                    TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc writeTasks: {writeTasks.Count}");
                     await Task.WhenAll(writeTasks).WithTimeout(TestTimeout);
                     writeTasks.Clear();
                 }
@@ -272,7 +235,6 @@ namespace DotNetty.Handlers.Tests
                 {
                     if (ch.Active)
                     {
-                        TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc ReadOutboundAsync");
                         await ReadOutboundAsync(
                             async () => ch.ReadOutbound<IByteBuffer>(),
                             output.Count - readResultBuffer.ReadableBytes,
@@ -280,13 +242,10 @@ namespace DotNetty.Handlers.Tests
                             TestTimeout,
                             readResultBuffer.ReadableBytes != 0 ? 0 : 1
                         );
-                        TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc ReadOutboundAsync complete");
                     }
                 }
                 int read = Math.Min(output.Count, readResultBuffer.ReadableBytes);
                 readResultBuffer.ReadBytes(output.Array, output.Offset, read);
-                
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"... readDataFunc read: {read}");
                 return read;
             };
             var mediationStream = new MediationStream(
@@ -300,11 +259,8 @@ namespace DotNetty.Handlers.Tests
                 input =>
                 {
                     Task task = executor.SubmitAsync(
-                        () =>
-                        {
-                            TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), $"writeDataFunc: count: {input.Count}, offset: {input.Offset}");
-                            return writeStrategy.WriteToChannelAsync(ch, input);
-                        }).Unwrap();
+                        () => writeStrategy.WriteToChannelAsync(ch, input)
+                    ).Unwrap();
                     writeTasks.Add(task);
                     return task;
                 },
@@ -316,12 +272,10 @@ namespace DotNetty.Handlers.Tests
             var driverStream = new SslStream(mediationStream, true, (_1, _2, _3, _4) => true);
             if (isClient)
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "AuthenticateAsServerAsync");
                 await Task.Run(() => driverStream.AuthenticateAsServerAsync(tlsCertificate, false, serverProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
             }
             else
             {
-                TlsHandler.Trace("Test" + nameof(SetupStreamAndChannelAsync), "AuthenticateAsClientAsync");
                 await Task.Run(() => driverStream.AuthenticateAsClientAsync(targetHost, null, clientProtocol, false)).WithTimeout(TimeSpan.FromSeconds(5));
             }
             writeTasks.Clear();
