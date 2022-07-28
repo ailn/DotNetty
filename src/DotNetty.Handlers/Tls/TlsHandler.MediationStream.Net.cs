@@ -7,11 +7,8 @@ namespace DotNetty.Handlers.Tls
     using System;
     using System.Collections.Generic;
     using System.Diagnostics.Contracts;
-    using System.IO;
     using System.Threading;
     using System.Threading.Tasks;
-    using DotNetty.Common.Utilities;
-    using TaskCompletionSource = DotNetty.Common.Concurrency.TaskCompletionSource;
 
     partial class TlsHandler
     {
@@ -154,7 +151,7 @@ namespace DotNetty.Handlers.Tls
 
             int ReadFromInput(Memory<byte> destination)
             {
-                int read = this.source.ReadOne(destination);//this.source.Read(destination);
+                int read = this.source.Read(destination);
                 Trace(nameof(MediationStream), $"{nameof(this.ReadFromInput)} buffer.Length: {destination.Length}, read: {read}");
                 return read;
             }
@@ -182,8 +179,8 @@ namespace DotNetty.Handlers.Tls
 
             sealed class Source
             {
-                readonly byte[] input;
-                readonly int startOffset;
+                byte[] input;
+                int startOffset;
                 int offset;
                 int length;
 
@@ -213,6 +210,23 @@ namespace DotNetty.Handlers.Tls
                     new ReadOnlySpan<byte>(this.input, this.startOffset + this.offset, len).CopyTo(destination.Span);
                     this.offset += len;
                     return len;
+                }
+
+                // This is to not discard input bytes by ref counting mechanism
+                public void Retain()
+                {
+                    int readableBytes = this.ReadableBytes;
+                    if (readableBytes <= 0)
+                    {
+                        return;
+                    }
+                    
+                    // todo: is there a way to not discard those bytes till they are read??? If not, then use context.Allocator???
+                    byte[] copy = new byte[readableBytes];
+                    Buffer.BlockCopy(this.input, this.startOffset + this.offset, copy, 0, readableBytes);
+                    this.input = copy;
+                    this.startOffset = 0;
+                    this.offset = 0;
                 }
             }
 
@@ -304,14 +318,22 @@ namespace DotNetty.Handlers.Tls
                     return 0;
                 }
 
-                // Remove all not readable sources. Start from first as it's the oldest
+                // Remove all not readable sources and retain readable. Start from first as it's the oldest
                 public void CleanUp()
                 {
                     LinkedListNode<Source> node = this.sources.First;
-                    while (node != null && !node.Value.IsReadable)
+                    while (node != null)
                     {
-                        this.sources.RemoveFirst();
-                        node = this.sources.First;
+                        if (!node.Value.IsReadable)
+                        {
+                            this.sources.RemoveFirst();
+                            node = this.sources.First;
+                        }
+                        else
+                        {
+                            node.Value.Retain();
+                            node = node.Next;
+                        }
                     }
                 }
             }
