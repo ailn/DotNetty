@@ -195,8 +195,7 @@ namespace DotNetty.Handlers.Tests
                 bool isEqual = ByteBufferUtil.Equals(expectedBuffer, finalReadBuffer);
                 if (!isEqual)
                 {
-                    // Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
-                    Assert.True(isEqual, $"---Expected readablebytes:\n{expectedBuffer.ReadableBytes}\n---Actual readablebytes:\n{finalReadBuffer.ReadableBytes}");
+                    Assert.True(isEqual, $"---Expected:\n{ByteBufferUtil.PrettyHexDump(expectedBuffer)}\n---Actual:\n{ByteBufferUtil.PrettyHexDump(finalReadBuffer)}");
                 }
                 driverStream.Dispose();
                 Assert.False(ch.Finish());
