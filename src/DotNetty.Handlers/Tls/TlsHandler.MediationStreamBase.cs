@@ -27,13 +27,10 @@ namespace DotNetty.Handlers.Tls
             }
             
             public abstract bool SourceIsReadable { get; }
-
             public abstract int SourceReadableBytes { get; }
 
             public abstract void SetSource(byte[] source, int offset);
-
             public abstract void ExpandSource(int count);
-
             public abstract void ResetSource();
 
             #region plumbing
@@ -54,11 +51,8 @@ namespace DotNetty.Handlers.Tls
             }
 
             public override bool CanRead => true;
-
             public override bool CanSeek => false;
-
             public override bool CanWrite => true;
-
             public override long Length
             {
                 get { throw new NotSupportedException(); }
