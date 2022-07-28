@@ -183,6 +183,7 @@ namespace DotNetty.Handlers.Tls
                 int startOffset;
                 int offset;
                 int length;
+                bool retained;
 
                 public Source(byte[] input, int offset)
                 {
@@ -216,7 +217,7 @@ namespace DotNetty.Handlers.Tls
                 public void Retain()
                 {
                     int readableBytes = this.ReadableBytes;
-                    if (readableBytes <= 0)
+                    if (this.retained || readableBytes <= 0)
                     {
                         return;
                     }
@@ -226,7 +227,8 @@ namespace DotNetty.Handlers.Tls
                     Buffer.BlockCopy(this.input, this.startOffset + this.offset, copy, 0, readableBytes);
                     this.input = copy;
                     this.startOffset = 0;
-                    this.offset = 0;
+
+                    this.retained = true;
                 }
             }
 
